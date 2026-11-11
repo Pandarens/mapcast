@@ -74,21 +74,24 @@ first 3 cycles, then slowly), so a companion started later still gets
 everything without any back-channel. The companion applies a blob once it holds all `count` chunks
 of one `gen`.
 
-Channels: 1 session, 2 map, 3 roster, 4 world, 10+ pins (phase 2).
+Channels: 1 session, 2 map, 3 roster, 4 world, 5 zones, 6 travel, 10+ pins (phase 2).
 
 ## Blob records
 
 ### 0x20 SESSION (channel 1)
 
-`addonVersion u8 | interface u32 | locale str | player str | realm str | classID u8`
+`addonVersion u8 | interface u32 | locale str | player str | realm str | classID u8 | faction u8 | level u8`
 
-### 0x21 MAPINFO (channels 2 and 4)
+faction: 0 other, 1 Alliance, 2 Horde. `faction` and `level` came with addon version 2 (0.3.0); the
+companion reads them only when present. The blob is rebuilt on a level up.
+
+### 0x21 MAPINFO (channels 2, 4 and 5)
 
 `mapID u32 | mapType u8 | parentMapID u32 | name str | nLayers u8`, then per layer:
 `layerW u16 | layerH u16 | tileW u16 | tileH u16 | nTiles u16 | fileID u32 * nTiles`
 
 Tiles are row-major, `ceil(layerW / tileW)` per row (from
-`C_Map.GetMapArtLayerTextures`).
+`C_Map.GetMapArtLayerTextures`). The zones channel sends no layers (`nLayers` 0): only the names.
 
 ### 0x22 EXPLORED (channel 2)
 
@@ -102,7 +105,7 @@ the last row/column is cropped. flags: 1 shown only on mouse-over (skipped).
 
 `count u8`, then `unit u8 | classID u8 | name str`.
 
-### 0x24 MAPRECT (channels 2 and 4)
+### 0x24 MAPRECT (channels 2, 4 and 5)
 
 `mapID u32 | left u32 | right u32 | top u32 | bottom u32`: where a map sits on
 the seamless world (world coordinates). Channel 2 sends it for the current map,
@@ -112,4 +115,34 @@ so party positions can be placed on the world too.
 
 `flags u8 | worldMapID u32 | openmapVersion str`. flags: 1 OpenMap's API is
 present. The world channel holds WORLDINFO, then MAPINFO for the world map,
-then MAPINFO and MAPRECT for each continent on it.
+then MAPINFO, MAPRECT and CONTYARDS for each continent on it.
+
+### 0x26 CONTYARDS (channel 4)
+
+`mapID u32 | continent u16 | x00 i32 | y00 i32 | x10 i32 | y10 i32 | x01 i32 | y01 i32`: where a
+continent's map lies in the game's world yards (the coordinates of `UnitPosition` and the taxi
+tables): `C_Map.GetWorldPosFromMapPos` of its map points (0, 0), (1, 0) and (0, 1), in hundredths
+of a yard (signed). `continent` is the instance it is on (0 the Eastern Kingdoms, 1 Kalimdor). With
+MAPRECT this places any point in yards on the world; the companion places OpenMap's flight
+masters, docks and dungeon entrances by it.
+
+### Zones (channel 5)
+
+MAPRECT and then MAPINFO (no layers) for every zone of every continent
+(`C_Map.GetMapChildrenInfo(continent, Enum.UIMapType.Zone)`) that has a place on the world: the
+zones' names in the game's language and their rects.
+
+### 0x27 TAXINODES (channel 6)
+
+`count u16`, then `nodeID u16 | flags u8 | name str`: the flight masters
+`C_TaxiMap.GetTaxiNodesForMap` lists for Kalimdor and the Eastern Kingdoms, named in the game's
+language. flags: 1 learned. WoW Forever lists every flight master as found, learned or not, so a
+node counts as learned when the addon saw it as learned at a flight master (`TAXIMAP_OPENED`,
+saved per character in `MapCastCharDB`) or OpenMap did (`OpenMapCharDB.worldmap.flightsKnown`),
+or when the game's list marks it found while hiding others.
+
+### 0x28 INSTNAMES (channel 6)
+
+`count u8`, then `instanceID u16 | name str`: the dungeons and raids of OpenMap's data, named by
+`GetRealZoneText(instanceID)` in the game's language. Empty when the client answers the same
+name for every ID.

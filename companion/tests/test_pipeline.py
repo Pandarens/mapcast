@@ -3,8 +3,11 @@ import math
 
 import pytest
 
+from mapcast.places import YardsToWorld
 from mapcast.protocol import Decoder, crc16
 from mapcast.sim import SimGame
+
+BULK = {"session", "map", "roster", "world", "zones", "travel"}
 
 
 def run(game, decoder, frames, width=1024, height=48):
@@ -27,8 +30,8 @@ def test_full_chain_decodes_everything():
     assert decoder.bad_pages == 0
     assert decoder.geometry.cell == 3 and decoder.geometry.cols == 256 and decoder.geometry.rows == 2
 
-    assert got["session"] == {"addonVersion": 1, "interface": 16001, "locale": "ruRU",
-                              "player": "Тестер", "realm": "Тестовый мир", "classID": 8}
+    assert got["session"] == {"addonVersion": 2, "interface": 16001, "locale": "ruRU", "player": "Тестер",
+                              "realm": "Тестовый мир", "classID": 8, "faction": "Alliance", "level": 30}
     info = got["map"]["info"]
     assert info["mapID"] == 1429 and info["name"] == "Элвиннский лес" and info["parentMapID"] == 1415
     assert info["layers"][0]["tiles"] == [100000 + i for i in range(1, 13)]
@@ -64,15 +67,15 @@ def test_strip_settings_still_decode(commands):
     decoder = Decoder()
     got = run(game, decoder, 200, width=1024, height=64)
     assert decoder.bad_pages == 0
-    assert {"session", "map", "roster", "state", "world"} <= got.keys()
+    assert BULK | {"state"} <= got.keys()
 
 
 def test_late_companion_still_gets_bulk_data():
     game = SimGame()
     run(game, Decoder(), 600)  # 20 s: the blobs are past their fast cycles
     decoder = Decoder()
-    got = run(game, decoder, 150)  # 5 s of slow repeats
-    assert {"session", "map", "roster", "world"} <= got.keys()
+    got = run(game, decoder, 240)  # 8 s of slow repeats
+    assert BULK <= got.keys()
 
 
 def test_reload_with_same_generation_is_detected():
@@ -163,4 +166,76 @@ def test_shrinking_the_strip_mid_stream_recuts_the_blobs():
     decoder = Decoder()
     got = run(game, decoder, 200, width=1024, height=64)
     assert decoder.bad_pages == 0
-    assert {"session", "map", "roster", "world"} <= got.keys()
+    assert BULK <= got.keys()
+
+
+def mock_yards(game, continent, wx, wy):
+    """Where the mock puts a point in world yards on Azeroth's map."""
+    k = game.mock.yards[continent]
+    return k.a - k.b * wy, k.c - k.d * wx
+
+
+def test_world_channel_places_the_continents_in_yards():
+    game, decoder = SimGame(), Decoder()
+    world = run(game, decoder, 150)["world"]
+    yards = world["yards"]
+    assert {m: y["continent"] for m, y in yards.items()} == {1414: 1, 1415: 0}
+    to_world = YardsToWorld(yards, {m["mapID"]: m["rect"] for m in world["maps"]})
+    for continent, wx, wy in ((0, -8832.8, 478.6), (1, 1677.6, -4315.7), (0, -14444.3, 509.6)):
+        assert to_world(continent, wx, wy) == pytest.approx(mock_yards(game, continent, wx, wy), abs=1e-6)
+    left, right, top, bottom = lua_rect(game, 1429)
+    u, v = to_world(0, -8832.8, 478.6)  # Stormwind's flight master is in Elwynn's north-west
+    assert left < u < (left + right) / 2 and top < v < (top + bottom) / 2
+    assert to_world(2991, 1848.3, 569.1) is None  # a continent off the stitched world
+
+
+def test_zones_channel_names_and_places_each_zone():
+    game, decoder = SimGame(), Decoder()
+    zones = run(game, decoder, 150)["zones"]
+    assert set(zones) == {1411, 1412, 1413, 1426, 1429, 1431, 1432, 1434, 1436, 1440}
+    assert zones[1429]["name"] == "Элвиннский лес" and zones[1429]["parentMapID"] == 1415
+    for map_id, zone in zones.items():
+        assert zone["rect"] == pytest.approx(lua_rect(game, map_id), abs=1e-6)
+
+
+def test_travel_channel_learns_flight_masters():
+    game, decoder = SimGame(), Decoder()
+    travel = run(game, decoder, 150)["travel"]
+    assert len(travel["nodes"]) == 16 and travel["nodes"][12]["name"] == "Темнолесье, Сумеречный лес"
+    # WoW Forever lists them all as found: only those OpenMap saw as learned count
+    assert sorted(i for i, n in travel["nodes"].items() if n["known"]) == [2, 4, 6]
+    assert travel["instances"] == {34: "Тюрьма Штормграда", 36: "Мертвые копи", 90: "Гномреган",
+                                   409: "Огненные Недра"}
+
+    game.lua.execute("""MockWoW.taxi = { { "Штормград, Элвиннский лес", "CURRENT" },
+        { "Темнолесье, Сумеречный лес", "REACHABLE" }, { "Телсамар, Лок Модан", "DISTANT" } }""")
+    game.mock.fire("TAXIMAP_OPENED")
+    travel = run(game, decoder, 60)["travel"]
+    assert sorted(i for i, n in travel["nodes"].items() if n["known"]) == [2, 4, 6, 12]
+    assert game.lua.eval("MapCastCharDB.flights['Темнолесье, Сумеречный лес']")
+
+
+def test_travel_trusts_the_game_list_when_it_hides_some():
+    game = SimGame()
+    game.lua.execute("""OpenMapCharDB = nil
+        local list = C_TaxiMap.GetTaxiNodesForMap
+        C_TaxiMap.GetTaxiNodesForMap = function(mapID)
+            local out = list(mapID)
+            for _, node in ipairs(out) do node.isUndiscovered = node.nodeID ~= 5 end
+            return out
+        end""")
+    travel = run(game, Decoder(), 150)["travel"]
+    assert [i for i, n in travel["nodes"].items() if n["known"]] == [5]
+
+
+def test_no_dungeon_names_from_a_client_that_ignores_the_id():
+    game = SimGame()
+    game.lua.execute('GetRealZoneText = function() return "Элвиннский лес" end')
+    assert run(game, Decoder(), 150)["travel"]["instances"] == {}
+
+
+def test_level_up_updates_the_session():
+    game, decoder = SimGame(), Decoder()
+    run(game, decoder, 30)
+    game.mock.fire("PLAYER_LEVEL_UP", 31)
+    assert run(game, decoder, 30)["session"]["level"] == 31

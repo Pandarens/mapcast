@@ -103,13 +103,64 @@ local function Vector(x, y)
 end
 
 -- Maps the mock knows: name, type, parent, and rect on Azeroth's map (947). The continent rects
--- are fitted to OpenMap's art; Elwynn's is read off its stitched zone tiles (close, not exact).
+-- are fitted to OpenMap's art.
 M.maps = {
 	[947] = { name = "Азерот", type = 1, parent = 0, rect = { 0, 1, 0, 1 } },
 	[1414] = { name = "Калимдор", type = 2, parent = 947, rect = { -0.1679, 0.6338, 0.0497, 0.8514 } },
 	[1415] = { name = "Восточные королевства", type = 2, parent = 947, rect = { 0.3621, 1.1638, 0.0819, 0.8836 } },
-	[1429] = { name = "Элвиннский лес", type = 3, parent = 1415, rect = { 0.7086, 0.7685, 0.6138, 0.6737 } },
 }
+
+-- World yards on each continent (instance 0 the Eastern Kingdoms, 1 Kalimdor) on Azeroth's map:
+-- u = a - b * worldY, v = c - d * worldX. Fitted to the zone rects OpenMap's Data/Forever/Gaps.lua
+-- gives on the world against the zones' yards, so places land where OpenMap's zone art has them.
+M.yards = {
+	[0] = { a = 0.729517, b = 2.23771e-5, c = 0.33209, d = 3.356565e-5 },
+	[1] = { a = 0.194390, b = 2.22823e-5, c = 0.49553, d = 3.342345e-5 },
+}
+local CONTINENT_OF = { [1415] = 0, [1414] = 1 }
+
+-- Zones: name, continent map, and their box in yards (width, height, left = max worldY, top = max worldX).
+local ZONES = {
+	[1429] = { "Элвиннский лес", 1415, 3470.83, 2314.58, 1535.42, -7939.58 },
+	[1436] = { "Западный Край", 1415, 3500.00, 2333.33, 3016.67, -9400.00 },
+	[1431] = { "Сумеречный лес", 1415, 2700.00, 1800.00, -416.67, -9716.67 },
+	[1434] = { "Тернистая долина", 1415, 6381.25, 4254.17, 2220.83, -11168.75 },
+	[1426] = { "Дун Морог", 1415, 4925.00, 3283.33, 1802.08, -3877.08 },
+	[1432] = { "Лок Модан", 1415, 2758.33, 1839.58, -1993.75, -4487.50 },
+	[1411] = { "Дуротар", 1414, 5287.50, 3525.00, -1962.50, 1808.33 },
+	[1412] = { "Мулгор", 1414, 5137.50, 3425.00, 2047.92, 1662.50 },
+	[1413] = { "Степи", 1414, 10133.33, 6756.25, 2622.92, 1612.50 },
+	[1440] = { "Ясеневый лес", 1414, 5766.67, 3843.75, 1700.00, 4672.92 },
+}
+for mapID, z in pairs(ZONES) do
+	local y = M.yards[CONTINENT_OF[z[2]]]
+	local l, t = y.a - y.b * z[5], y.c - y.d * z[6]
+	M.maps[mapID] = { name = z[1], type = 3, parent = z[2], rect = { l, l + y.b * z[3], t, t + y.d * z[4] } }
+end
+
+-- Flight masters the game lists (C_TaxiMap.GetTaxiNodesForMap), in the client's language. WoW Forever
+-- lists every one as found, learned or not.
+M.taxiNodes = {
+	[1415] = {
+		{ 2, "Штормград, Элвиннский лес" }, { 4, "Сторожевой холм, Западный Край" }, { 5, "Приозерье, Красногорье" },
+		{ 6, "Стальгорн, Дун Морог" }, { 7, "Гавань Менетил, Болотина" }, { 8, "Телсамар, Лок Модан" },
+		{ 12, "Темнолесье, Сумеречный лес" }, { 19, "Пиратская Бухта, Тернистая долина" },
+		{ 18, "Пиратская Бухта, Тернистая долина" }, { 20, "Гром'гол, Тернистая долина" },
+	},
+	[1414] = {
+		{ 22, "Громовой Утес, Мулгор" }, { 23, "Оргриммар, Дуротар" }, { 25, "Перекресток, Степи" },
+		{ 26, "Аубердин, Темные берега" }, { 28, "Астранаар, Ясеневый лес" }, { 32, "Терамор, Пылевые топи" },
+	},
+}
+-- What a flight master's own list shows (TaxiNodeName, TaxiNodeGetType) while its map is open.
+M.taxi = {}
+M.faction, M.level = "Alliance", 30
+M.instanceNames = { [34] = "Тюрьма Штормграда", [36] = "Мертвые копи", [90] = "Гномреган", [409] = "Огненные Недра" }
+
+-- OpenMap's per-character save, with the flight masters it saw as learned.
+OpenMapCharDB = { worldmap = { flightsKnownV = 2, flightsKnown = {
+	["Штормград, Элвиннский лес"] = true, ["Сторожевой холм, Западный Край"] = true, ["Стальгорн, Дун Морог"] = true,
+} } }
 
 C_Map = {}
 function C_Map.GetBestMapForUnit() return M.mapID end
@@ -140,6 +191,18 @@ function C_Map.GetMapInfo(mapID)
 	if not map then return nil end
 	return { mapID = mapID, name = map.name, mapType = map.type, parentMapID = map.parent }
 end
+function C_Map.GetWorldPosFromMapPos(mapID, pos)
+	local map = M.maps[mapID]
+	local contMap = map and (CONTINENT_OF[mapID] and mapID or map.parent)
+	local cont = contMap and CONTINENT_OF[contMap]
+	if not cont then return nil end
+	local x, y = pos:GetXY()
+	local l, r, t, b = unpack(map.rect)
+	local u, v = l + x * (r - l), t + y * (b - t)
+	local k = M.yards[cont]
+	return cont, Vector((k.c - v) / k.d, (k.a - u) / k.b)
+end
+function CreateVector2D(x, y) return Vector(x, y) end
 function C_Map.GetMapArtLayers()
 	return { { layerWidth = 1002, layerHeight = 668, tileWidth = 256, tileHeight = 256 } }
 end
@@ -162,6 +225,21 @@ C_AddOns = {}
 function C_AddOns.GetAddOnMetadata(name, field)
 	if name == "OpenMap" and field == "Version" then return "0.8.3" end
 end
+
+C_TaxiMap = {}
+function C_TaxiMap.GetTaxiNodesForMap(mapID)
+	local out = {}
+	for _, node in ipairs(M.taxiNodes[mapID] or {}) do
+		out[#out + 1] = { nodeID = node[1], name = node[2], isUndiscovered = false }
+	end
+	return out
+end
+function NumTaxiNodes() return #M.taxi end
+function TaxiNodeName(i) return M.taxi[i] and M.taxi[i][1] end
+function TaxiNodeGetType(i) return M.taxi[i] and M.taxi[i][2] end
+function UnitFactionGroup() return M.faction, M.faction end
+function UnitLevel() return M.level end
+function GetRealZoneText(id) return M.instanceNames[id] or "" end
 
 C_MapExplorationInfo = {}
 function C_MapExplorationInfo.GetExploredMapTextures()

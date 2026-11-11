@@ -1,7 +1,7 @@
 -- MapCast: collects map data and streams it through the pixel strip.
 local addonName, ns = ...
 
-local ADDON_VERSION = 1
+local ADDON_VERSION = 2
 local CHUNK_SIZE = 400 -- largest bulk chunk; smaller when the strip's page is small
 local BULK_RESERVE = 100 -- page room kept for the per-page records (state, world position, party)
 local FAST_CYCLES = 3 -- full repeats of a changed blob at full speed
@@ -9,21 +9,34 @@ local SLOW_EVERY = 5 -- afterwards, one chunk per channel every N pages
 
 local REC_STATE, REC_GROUP, REC_WORLD, REC_BULK = 0x01, 0x02, 0x03, 0x10
 local REC_SESSION, REC_MAPINFO, REC_EXPLORED, REC_ROSTER = 0x20, 0x21, 0x22, 0x23
-local REC_MAPRECT, REC_WORLDINFO = 0x24, 0x25
-local CH_SESSION, CH_MAP, CH_ROSTER, CH_WORLD = 1, 2, 3, 4
+local REC_MAPRECT, REC_WORLDINFO, REC_CONTYARDS, REC_TAXINODES, REC_INSTNAMES = 0x24, 0x25, 0x26, 0x27, 0x28
+local CH_SESSION, CH_MAP, CH_ROSTER, CH_WORLD, CH_ZONES, CH_TRAVEL = 1, 2, 3, 4, 5, 6
 
 -- The seamless world is Azeroth's map (uiMapID 947), the same space OpenMap stitches its zones in.
 local WORLD_MAP = 947
 local CONTINENT_TYPE = 2 -- Enum.UIMapType.Continent
+local ZONE_TYPE = 3 -- Enum.UIMapType.Zone
+local FACTION_CODE = { Alliance = 1, Horde = 2 }
+
+-- Kalimdor and the Eastern Kingdoms: the maps the game lists flight masters for.
+local TAXI_MAPS = { 1414, 1415 }
+-- The kinds of node a flight master lists that you have learned (DISTANT: one a route passes, not learned).
+local LEARNED = { CURRENT = true, REACHABLE = true, UNREACHABLE = true }
+-- The dungeons and raids in OpenMap's data (Data/Forever/Places.lua), sent with their names in the
+-- game's language; the phone falls back to OpenMap's English name for any other.
+local INSTANCES = {
+	33, 34, 36, 43, 47, 48, 70, 90, 109, 129, 189, 209, 229, 230, 249, 289, 309, 329, 349, 389, 409,
+	429, 469, 509, 531, 2959, 2998, 2999, 3065,
+}
 
 local floor, min, max, ceil, pi = math.floor, math.min, math.max, math.ceil, math.pi
 
 local defaults = { enabled = true, cellPx = 3, cols = 256, rows = 2, interval = 0.1 }
 
-local db
+local db, charDB
 local seq, pageCounter, elapsedSinceTick = 0, 0, 0
 local currentMapID = 0
-local mapDirty, rosterDirty, worldDirty = true, true, true
+local mapDirty, rosterDirty, worldDirty, travelDirty = true, true, true, true
 local lastError
 
 ---------------------------------------------------------------------------
@@ -221,7 +234,7 @@ end
 ---------------------------------------------------------------------------
 -- Collectors
 
-local function BuildSession()
+local function BuildSession(level)
 	local body = ns.NewBuffer()
 	body:u8(ADDON_VERSION)
 	body:u32(select(4, GetBuildInfo()) or 0)
@@ -229,12 +242,15 @@ local function BuildSession()
 	body:str(Safe(UnitName("player")) or "")
 	body:str(GetRealmName() or "")
 	body:u8(ClassID("player"))
+	body:u8(FACTION_CODE[Safe(UnitFactionGroup("player"))] or 0)
+	level = IsNumber(level) and level or Safe(UnitLevel("player"))
+	body:u8(IsNumber(level) and max(0, min(255, level)) or 0)
 	local blob = ns.NewBuffer()
 	blob:record(REC_SESSION, body)
 	return blob
 end
 
-local function AppendMapInfo(blob, mapID)
+local function AppendMapInfo(blob, mapID, nameOnly)
 	local info = mapID > 0 and C_Map.GetMapInfo(mapID)
 	if not info then
 		return false
@@ -244,7 +260,7 @@ local function AppendMapInfo(blob, mapID)
 	body:u8(info.mapType or 0)
 	body:u32(info.parentMapID or 0)
 	body:str(info.name or "")
-	local layers = C_Map.GetMapArtLayers(mapID) or {}
+	local layers = not nameOnly and C_Map.GetMapArtLayers(mapID) or {}
 	body:u8(#layers)
 	for index, layer in ipairs(layers) do
 		local tiles = C_Map.GetMapArtLayerTextures(mapID, index) or {}
@@ -258,6 +274,38 @@ local function AppendMapInfo(blob, mapID)
 		end
 	end
 	blob:record(REC_MAPINFO, body)
+	return true
+end
+
+-- Where a continent's map lies in the game's world yards (UnitPosition's and the taxi tables'), from
+-- three of its corners: the companion places OpenMap's flight masters, docks and dungeon entrances by it.
+local CORNERS = { { 0, 0 }, { 1, 0 }, { 0, 1 } }
+
+local function AppendYards(blob, mapID)
+	if not (C_Map.GetWorldPosFromMapPos and CreateVector2D) then
+		return false
+	end
+	local continent, coords = nil, {}
+	for _, corner in ipairs(CORNERS) do
+		local ok, cont, pos = pcall(C_Map.GetWorldPosFromMapPos, mapID, CreateVector2D(corner[1], corner[2]))
+		if not ok or type(pos) ~= "table" or not pos.GetXY then
+			return false
+		end
+		local okXY, x, y = pcall(pos.GetXY, pos)
+		if not okXY or not IsNumber(cont, x, y) or (continent and cont ~= continent) then
+			return false
+		end
+		continent = cont
+		coords[#coords + 1] = x
+		coords[#coords + 1] = y
+	end
+	local body = ns.NewBuffer()
+	body:u32(mapID)
+	body:u16(continent)
+	for _, v in ipairs(coords) do
+		body:u32(floor(v * 100 + 0.5)) -- signed: a negative number wraps to its two's complement
+	end
+	blob:record(REC_CONTYARDS, body)
 	return true
 end
 
@@ -288,8 +336,135 @@ local function BuildWorld()
 		if mapID and MapRectOnWorld(mapID) then
 			AppendMapInfo(blob, mapID)
 			AppendMapRect(blob, mapID)
+			AppendYards(blob, mapID)
 		end
 	end
+	return blob
+end
+
+-- Every zone of every continent: its name in the game's language and where it sits on the world.
+local function BuildZones()
+	local blob = ns.NewBuffer()
+	local ok, continents = pcall(C_Map.GetMapChildrenInfo, WORLD_MAP, CONTINENT_TYPE)
+	for _, continent in ipairs(ok and continents or {}) do
+		local contID = Safe(continent.mapID)
+		local okZones, zones = false, nil
+		if contID then
+			okZones, zones = pcall(C_Map.GetMapChildrenInfo, contID, ZONE_TYPE)
+		end
+		for _, zone in ipairs(okZones and zones or {}) do
+			local mapID = Safe(zone.mapID)
+			if mapID and AppendMapRect(blob, mapID) then
+				AppendMapInfo(blob, mapID, true)
+			end
+		end
+	end
+	return blob
+end
+
+---------------------------------------------------------------------------
+-- Travel: flight masters (which are learned) and dungeon names in the game's language
+
+-- The flight masters the game lists: nodeID -> { name, undiscovered }, in the list's order.
+local function TaxiNodes()
+	local nodes, order = {}, {}
+	if not (C_TaxiMap and C_TaxiMap.GetTaxiNodesForMap) then
+		return nodes, order
+	end
+	for _, mapID in ipairs(TAXI_MAPS) do
+		local ok, list = pcall(C_TaxiMap.GetTaxiNodesForMap, mapID)
+		for _, info in ipairs(ok and type(list) == "table" and list or {}) do
+			local id = type(info) == "table" and Safe(info.nodeID)
+			if IsNumber(id) and not nodes[id] then
+				local name = Safe(info.name)
+				nodes[id] = { name = type(name) == "string" and name or "", undiscovered = Safe(info.isUndiscovered) }
+				order[#order + 1] = id
+			end
+		end
+	end
+	return nodes, order
+end
+
+-- Names of the flight masters seen as learned at a flight master: ours, and OpenMap's (per character).
+local function KnownFlightNames()
+	local known = {}
+	for name in pairs(charDB and charDB.flights or {}) do
+		known[name] = true
+	end
+	local om = type(_G.OpenMapCharDB) == "table" and _G.OpenMapCharDB.worldmap
+	if type(om) == "table" and om.flightsKnownV == 2 and type(om.flightsKnown) == "table" then
+		for name, on in pairs(om.flightsKnown) do
+			if on and type(name) == "string" then
+				known[name] = true
+			end
+		end
+	end
+	return known
+end
+
+-- At a flight master: remember the learned ones by name (the game's own list can't tell on WoW Forever).
+local function LearnFlights()
+	if not (charDB and NumTaxiNodes and TaxiNodeName and TaxiNodeGetType) then
+		return
+	end
+	charDB.flights = charDB.flights or {}
+	for i = 1, Safe(NumTaxiNodes()) or 0 do
+		local name, kind = Safe(TaxiNodeName(i)), Safe(TaxiNodeGetType(i))
+		if type(name) == "string" and name ~= "" and LEARNED[kind] then
+			charDB.flights[name] = true
+		end
+	end
+end
+
+local function InstanceNames()
+	local names, count, distinct, seen = ns.NewBuffer(), 0, 0, {}
+	for _, id in ipairs(INSTANCES) do
+		local ok, name = pcall(GetRealZoneText, id)
+		name = ok and Safe(name)
+		if type(name) == "string" and name ~= "" then
+			names:u16(id)
+			names:str(name)
+			count = count + 1
+			if not seen[name] then
+				seen[name], distinct = true, distinct + 1
+			end
+		end
+	end
+	local body = ns.NewBuffer()
+	-- (a client whose GetRealZoneText ignores the ID answers the current zone for all of them)
+	if count > 1 and distinct == 1 then
+		count = 0
+	end
+	body:u8(count)
+	if count > 0 then
+		body:append(names)
+	end
+	return body
+end
+
+local function BuildTravel()
+	local nodes, order = TaxiNodes()
+	local known = KnownFlightNames()
+	-- WoW Forever lists every flight master as found, learned or not: trust the list only when it hides some
+	local listTells = false
+	for _, id in ipairs(order) do
+		if nodes[id].undiscovered == true then
+			listTells = true
+			break
+		end
+	end
+	local body = ns.NewBuffer()
+	body:u16(#order)
+	for _, id in ipairs(order) do
+		local node = nodes[id]
+		local learned = known[node.name] or (listTells and node.undiscovered == false)
+		body:u16(id)
+		body:u8(learned and 1 or 0)
+		body:str(node.name)
+	end
+	local blob = ns.NewBuffer()
+	blob:record(REC_TAXINODES, body)
+	blob:record(REC_INSTNAMES, InstanceNames())
 	return blob
 end
 
@@ -462,6 +637,11 @@ local function Tick()
 	if worldDirty then
 		worldDirty = false
 		Guard(function() SetChannel(CH_WORLD, BuildWorld()) end)
+		Guard(function() SetChannel(CH_ZONES, BuildZones()) end)
+	end
+	if travelDirty then
+		travelDirty = false
+		Guard(function() SetChannel(CH_TRAVEL, BuildTravel()) end)
 	end
 	Guard(AppendGroup, payload)
 	AppendBulk(payload, capacity)
@@ -499,6 +679,8 @@ driver:SetScript("OnEvent", function(_, event, arg1)
 		end
 		MapCastDB = MapCastDB or {}
 		db = MapCastDB
+		MapCastCharDB = MapCastCharDB or {}
+		charDB = MapCastCharDB
 		for k, v in pairs(defaults) do
 			if db[k] == nil then
 				db[k] = v
@@ -507,7 +689,7 @@ driver:SetScript("OnEvent", function(_, event, arg1)
 		ApplySettings()
 	elseif event == "PLAYER_ENTERING_WORLD" then
 		Guard(function() SetChannel(CH_SESSION, BuildSession()) end)
-		mapDirty, rosterDirty, worldDirty = true, true, true
+		mapDirty, rosterDirty, worldDirty, travelDirty = true, true, true, true
 		if ns.Strip.frame then
 			ns.Strip:Layout()
 		end
@@ -517,6 +699,11 @@ driver:SetScript("OnEvent", function(_, event, arg1)
 		end
 	elseif event == "GROUP_ROSTER_UPDATE" then
 		rosterDirty = true
+	elseif event == "TAXIMAP_OPENED" then
+		Guard(LearnFlights)
+		travelDirty = true
+	elseif event == "PLAYER_LEVEL_UP" then
+		Guard(function() SetChannel(CH_SESSION, BuildSession(arg1)) end)
 	else
 		mapDirty = true
 	end
@@ -525,7 +712,7 @@ end)
 for _, event in ipairs({
 	"ADDON_LOADED", "PLAYER_ENTERING_WORLD", "DISPLAY_SIZE_CHANGED", "UI_SCALE_CHANGED",
 	"GROUP_ROSTER_UPDATE", "ZONE_CHANGED", "ZONE_CHANGED_INDOORS", "ZONE_CHANGED_NEW_AREA",
-	"MAP_EXPLORATION_UPDATED",
+	"MAP_EXPLORATION_UPDATED", "TAXIMAP_OPENED", "PLAYER_LEVEL_UP",
 }) do
 	driver:RegisterEvent(event)
 end
@@ -556,6 +743,14 @@ local function Diagnose()
 		local layers = C_Map.GetMapArtLayers(mapID)
 		Print(("map art layers: %d"):format(layers and #layers or 0))
 	end
+	local nodes, order = TaxiNodes()
+	local known, learned = KnownFlightNames(), 0
+	for _, id in ipairs(order) do
+		if known[nodes[id].name] then
+			learned = learned + 1
+		end
+	end
+	Print(("flight masters listed %d, learned %d"):format(#order, learned))
 	local f = GetPlayerFacing()
 	Print(("facing %s secret=%s"):format(tostring(f), tostring(IsSecret(f))))
 	local w, h = GetPhysicalScreenSize()

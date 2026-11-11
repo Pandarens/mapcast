@@ -32,8 +32,8 @@ class Hub:
     def __init__(self, maps: MapImages, world: WorldImages):
         self.maps = maps
         self.world = world
-        self.snapshot: dict = {"session": None, "map": None, "world": None, "state": None, "group": [],
-                               "roster": {}, "status": {}}
+        self.snapshot: dict = {"session": None, "map": None, "world": None, "zones": {}, "travel": None,
+                               "state": None, "group": [], "roster": {}, "status": {}}
         self.clients: set[web.WebSocketResponse] = set()
         self._raw: dict[str, dict] = {}
 
@@ -44,8 +44,11 @@ class Hub:
         elif name == "world":
             self._raw[name] = data
             data = self.world.register(data)
-        elif name == "roster":
-            data = {str(unit): member for unit, member in data.items()}
+        elif name in ("roster", "zones"):
+            data = {str(key): value for key, value in data.items()}
+        elif name == "travel":
+            data = {"nodes": {str(k): v for k, v in data["nodes"].items()},
+                    "instances": {str(k): v for k, v in data["instances"].items()}}
         if self.snapshot.get(name) == data:
             return
         self.snapshot[name] = data
@@ -205,6 +208,13 @@ def create_app(hub: Hub, token: str, public_url: str) -> web.Application:
     async def world_sea(_: web.Request):
         return await _file(hub.world.sea_path)
 
+    async def world_places(_: web.Request):
+        blob = hub.world.places_json()
+        if blob is None:
+            raise web.HTTPNotFound()
+        return web.Response(body=blob, content_type="application/json",
+                            headers={"Cache-Control": "max-age=31536000, immutable"})
+
     async def zone_tile(request: web.Request):
         openmap = hub.world.openmap
         if openmap is None:
@@ -219,6 +229,7 @@ def create_app(hub: Hub, token: str, public_url: str) -> web.Application:
     app.router.add_get("/map/{key}.png", map_image)
     app.router.add_get("/world/art/{key}.png", world_art)
     app.router.add_get("/world/sea.png", world_sea)
+    app.router.add_get("/world/places.json", world_places)
     app.router.add_get(r"/world/zone/{level:\d+}/{i:\d+}_{j:\d+}", zone_tile)
     app.router.add_get("/favicon.ico", no_icon)
     app.router.add_static("/static/", WEB_DIR)

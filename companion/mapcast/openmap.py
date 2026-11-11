@@ -24,7 +24,9 @@ import numpy as np
 from PIL import Image, features
 
 from .blp import open_blp
+from .luadata import read_table
 from .maps import PARCHMENT, MapImages, placeholder
+from .places import YardsToWorld, build_places
 
 log = logging.getLogger(__name__)
 
@@ -143,6 +145,8 @@ class OpenMapArt:
             self.levels.append({(i >> 1, j >> 1) for i, j in self.levels[-1]})
         self._locks: dict[tuple, threading.Lock] = {}
         self._locks_guard = threading.Lock()
+        self._data_dir = data
+        self._places = None
 
     def _texture_path(self, name: str) -> str | None:
         for ext in (".tga", ".blp", ".png"):
@@ -163,6 +167,20 @@ class OpenMapArt:
         return {"version": self.version, "unit": za["step"] / za["px"], "tilePx": self.tile_px,
                 "maxLevel": len(self.levels) - 1, "tiles": [i * 256 + j for i, j in za["tiles"]],
                 "url": "/world/zone/{level}/{i}_{j}?v=" + self.stamp}
+
+    def places_data(self) -> tuple | None:
+        """OpenMap's flight network and its places (dungeon entrances, docks, sailings), read once."""
+        if self._places is None:
+            found = []
+            for file, table in (("FlightData.lua", "MapFlights"), ("Places.lua", "MapPlaces")):
+                path = os.path.join(self._data_dir, file)
+                try:
+                    found.append(read_table(_read(path), table) if os.path.exists(path) else None)
+                except (ValueError, IndexError) as e:
+                    log.warning("OpenMap %s: %s", file, e)
+                    found.append(None)
+            self._places = tuple(found) if any(found) else False
+        return self._places or None
 
     def edited_art(self, map_id: int, number: int) -> str | None:
         """OpenMap's hand-cleaned copy of an art tile (row-major, from 1), if it has one."""
@@ -246,6 +264,7 @@ class WorldImages:
         self.openmap = openmap
         self._specs: dict[str, dict] = {}
         self._lock = threading.Lock()
+        self._places: tuple[str, bytes] | None = None
         os.makedirs(self.cache_dir, exist_ok=True)
 
     def register(self, world: dict) -> dict | None:
@@ -273,7 +292,23 @@ class WorldImages:
                "url": f"/world/sea.png?v={self.openmap.stamp}" if self.openmap and self.openmap.sea else None}
         return {"worldMapID": base["mapID"], "width": layer["w"], "height": layer["h"], "art": art, "sea": sea,
                 "labels": labels, "zones": self.openmap.describe() if self.openmap else None,
+                "places": self._register_places(world, maps),
                 "openmapInGame": world.get("openmap", False), "openmapVersion": world.get("openmapVersion", "")}
+
+    def _register_places(self, world: dict, maps: list[dict]) -> dict | None:
+        """OpenMap's flights, docks, sailings and dungeon entrances, placed by the continents' yards."""
+        data = self.openmap.places_data() if self.openmap else None
+        to_world = YardsToWorld(world.get("yards") or {}, {m["mapID"]: m["rect"] for m in maps})
+        if not data or not to_world:
+            self._places = None
+            return None
+        blob = json.dumps(build_places(*data, to_world), separators=(",", ":")).encode()
+        key = hashlib.sha1(blob).hexdigest()[:12]
+        self._places = (key, blob)
+        return {"url": f"/world/places.json?v={key}"}
+
+    def places_json(self) -> bytes | None:
+        return self._places[1] if self._places else None
 
     def _edited_tiles(self, info: dict) -> dict[int, str]:
         if self.openmap is None:

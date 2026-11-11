@@ -14,8 +14,9 @@ MAX_CELL_PX = 8
 
 REC_STATE, REC_GROUP, REC_WORLD, REC_BULK = 0x01, 0x02, 0x03, 0x10
 REC_SESSION, REC_MAPINFO, REC_EXPLORED, REC_ROSTER = 0x20, 0x21, 0x22, 0x23
-REC_MAPRECT, REC_WORLDINFO = 0x24, 0x25
-CH_WORLD = 4
+REC_MAPRECT, REC_WORLDINFO, REC_CONTYARDS, REC_TAXINODES, REC_INSTNAMES = 0x24, 0x25, 0x26, 0x27, 0x28
+CH_WORLD, CH_ZONES, CH_TRAVEL = 4, 5, 6
+FACTIONS = {1: "Alliance", 2: "Horde"}
 
 STATE_FLAGS = ("hasPos", "hasFacing", "combat", "dead", "mounted", "flying", "instance", "resting")
 
@@ -44,6 +45,14 @@ class Reader:
         v = int.from_bytes(self.data[self.pos:self.pos + 4], "little")
         self.pos += 4
         return v
+
+    def i32(self) -> int:
+        v = int.from_bytes(self.data[self.pos:self.pos + 4], "little", signed=True)
+        self.pos += 4
+        return v
+
+    def left(self) -> int:
+        return len(self.data) - self.pos
 
     def str(self) -> str:
         n = self.u8()
@@ -196,8 +205,38 @@ def parse_group(body: bytes) -> list[dict]:
 
 def parse_session(body: bytes) -> dict:
     r = Reader(body)
-    return {"addonVersion": r.u8(), "interface": r.u32(), "locale": r.str(), "player": r.str(),
-            "realm": r.str(), "classID": r.u8()}
+    session = {"addonVersion": r.u8(), "interface": r.u32(), "locale": r.str(), "player": r.str(),
+               "realm": r.str(), "classID": r.u8(), "faction": None, "level": 0}
+    if r.left() >= 2:  # added in addon 0.3
+        session["faction"] = FACTIONS.get(r.u8())
+        session["level"] = r.u8()
+    return session
+
+
+def parse_contyards(body: bytes) -> dict:
+    """Where a continent's map lies in the game's world yards: its corners (0, 0), (1, 0), (0, 1)."""
+    r = Reader(body)
+    map_id, continent = r.u32(), r.u16()
+    corners = [(r.i32() / 100.0, r.i32() / 100.0) for _ in range(3)]
+    return {"mapID": map_id, "continent": continent, "p00": corners[0], "p10": corners[1], "p01": corners[2]}
+
+
+def parse_taxinodes(body: bytes) -> dict[int, dict]:
+    r = Reader(body)
+    nodes = {}
+    for _ in range(r.u16()):
+        node_id, flags, name = r.u16(), r.u8(), r.str()
+        nodes[node_id] = {"name": name, "known": bool(flags & 1)}
+    return nodes
+
+
+def parse_instnames(body: bytes) -> dict[int, str]:
+    r = Reader(body)
+    names = {}
+    for _ in range(r.u8()):
+        inst_id, name = r.u16(), r.str()
+        names[inst_id] = name
+    return names
 
 
 def parse_mapinfo(body: bytes) -> dict:
@@ -326,6 +365,10 @@ class Decoder:
     def _handle_blob(self, channel_id: int, blob: bytes) -> list[tuple[str, object]]:
         if channel_id == CH_WORLD:
             return [("world", self._parse_world_blob(blob))]
+        if channel_id == CH_ZONES:
+            return [("zones", self._parse_zones_blob(blob))]
+        if channel_id == CH_TRAVEL:
+            return [("travel", self._parse_travel_blob(blob))]
         events: list[tuple[str, object]] = []
         map_event: dict = {}
         for rtype, body in iter_records(blob):
@@ -348,7 +391,7 @@ class Decoder:
     @staticmethod
     def _parse_world_blob(blob: bytes) -> dict:
         """The world channel: Azeroth's map and each continent's map with its rect on it."""
-        world = {"openmap": False, "worldMapID": 0, "openmapVersion": "", "maps": []}
+        world = {"openmap": False, "worldMapID": 0, "openmapVersion": "", "maps": [], "yards": {}}
         rects = {}
         for rtype, body in iter_records(blob):
             if rtype == REC_WORLDINFO:
@@ -358,6 +401,33 @@ class Decoder:
             elif rtype == REC_MAPRECT:
                 rect = parse_maprect(body)
                 rects[rect["mapID"]] = rect["rect"]
+            elif rtype == REC_CONTYARDS:
+                yards = parse_contyards(body)
+                world["yards"][yards.pop("mapID")] = yards
         for info in world["maps"]:
             info["rect"] = [0.0, 1.0, 0.0, 1.0] if info["mapID"] == world["worldMapID"] else rects.get(info["mapID"])
         return world
+
+    @staticmethod
+    def _parse_zones_blob(blob: bytes) -> dict[int, dict]:
+        """The zones channel: each zone of each continent, its name and its rect on the world."""
+        zones, rects = {}, {}
+        for rtype, body in iter_records(blob):
+            if rtype == REC_MAPINFO:
+                info = parse_mapinfo(body)
+                zones[info["mapID"]] = {"name": info["name"], "parentMapID": info["parentMapID"]}
+            elif rtype == REC_MAPRECT:
+                rect = parse_maprect(body)
+                rects[rect["mapID"]] = rect["rect"]
+        return {map_id: {**zone, "rect": rects[map_id]} for map_id, zone in zones.items() if map_id in rects}
+
+    @staticmethod
+    def _parse_travel_blob(blob: bytes) -> dict:
+        """The travel channel: flight masters in the game's language and which are learned, dungeon names."""
+        travel = {"nodes": {}, "instances": {}}
+        for rtype, body in iter_records(blob):
+            if rtype == REC_TAXINODES:
+                travel["nodes"] = parse_taxinodes(body)
+            elif rtype == REC_INSTNAMES:
+                travel["instances"] = parse_instnames(body)
+        return travel
