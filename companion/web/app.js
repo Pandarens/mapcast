@@ -1091,7 +1091,7 @@ function drawGuideLine(player) {
   if (length < 24) return;
   ctx.save();
   ctx.lineCap = "round";
-  for (const [width, color] of [[7, GUIDE_SHADE], [4, GUIDE_LINE]]) {
+  for (const [width, color] of [[10, GUIDE_SHADE], [7, GUIDE_LINE]]) {
     ctx.beginPath();
     ctx.moveTo(from[0], from[1]);
     ctx.lineTo(to[0], to[1]);
@@ -1111,9 +1111,9 @@ function drawGuideLine(player) {
     ctx.translate(x, y);
     ctx.rotate(angle);
     ctx.beginPath();
-    ctx.moveTo(-6, -7);
-    ctx.lineTo(4, 0);
-    ctx.lineTo(-6, 7);
+    ctx.moveTo(-7, -9);
+    ctx.lineTo(5, 0);
+    ctx.lineTo(-7, 9);
     ctx.lineJoin = "round";
     ctx.lineWidth = 5.5;
     ctx.strokeStyle = GUIDE_SHADE;
