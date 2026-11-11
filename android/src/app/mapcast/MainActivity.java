@@ -257,7 +257,7 @@ public class MainActivity extends Activity {
                             DatagramPacket reply = new DatagramPacket(buf, buf.length);
                             socket.receive(reply);
                             String text = new String(reply.getData(), 0, reply.getLength(), StandardCharsets.UTF_8);
-                            if (text.startsWith(ANSWER)) found = text.substring(ANSWER.length()).trim();
+                            if (text.startsWith(ANSWER)) found = reachable(text.substring(ANSWER.length()).trim(), reply.getAddress());
                         } catch (java.net.SocketTimeoutException timeout) {
                             break;
                         }
@@ -280,6 +280,20 @@ public class MainActivity extends Activity {
                 }
             });
         }
+    }
+
+    /**
+     * The page's address at the PC's address the answer came from: that one this phone surely reaches
+     * (a PC with several network cards may name one the phone can't), with the port it names.
+     */
+    private static String reachable(String url, InetAddress from) {
+        String tail = url.endsWith("/") ? url.substring(0, url.length() - 1) : url;
+        String port = tail.substring(tail.lastIndexOf(':') + 1);
+        boolean digits = !port.isEmpty();
+        for (int i = 0; i < port.length(); i++) digits &= Character.isDigit(port.charAt(i));
+        if (!digits) port = String.valueOf(PORT);
+        if (from == null || !(from instanceof java.net.Inet4Address)) return url;
+        return "http://" + from.getHostAddress() + ":" + port;
     }
 
     private java.util.List<InetAddress> targets() {

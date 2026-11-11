@@ -157,9 +157,13 @@ fn open_openmap(root: Option<&PathBuf>, explicit: Option<&str>, cache: &std::pat
     }
 }
 
-fn print_banner(url: &str, token: &str) {
+fn print_banner(url: &str, token: &str, port: u16) {
     let link = format!("{url}/?t={token}");
     println!("\n  MapCast: open {link}\n  token: {token}\n");
+    let others: Vec<String> = util::lan_ips().iter().skip(1).map(|ip| format!("http://{ip}:{port}")).collect();
+    if !others.is_empty() {
+        println!("  this PC is also at: {}\n", others.join(", "));
+    }
     print!("{}", qr::terminal(&link));
 }
 
@@ -229,7 +233,7 @@ fn main() {
                 std::process::exit(1);
             }
         };
-        print_banner(&url, &token);
+        print_banner(&url, &token, args.port);
         if !args.no_browser {
             let _ = std::process::Command::new("cmd")
                 .args(["/C", "start", "", &format!("http://127.0.0.1:{}/qr", args.port)])

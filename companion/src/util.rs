@@ -81,15 +81,91 @@ pub fn load_token() -> String {
     token
 }
 
-/// The address phones on the same network can reach (no packets are sent).
+/// The addresses phones on the same network can reach this PC at: those of its network cards
+/// that are up and have a gateway (wired or Wi-Fi), best first. VPN and virtual adapters (WSL,
+/// Hyper-V, Cloudflare WARP and such) are left out: a phone can't reach them.
+pub fn lan_ips() -> Vec<std::net::Ipv4Addr> {
+    let mut ips = adapter_ips();
+    if ips.is_empty() {
+        // the address of the route out (no packets are sent)
+        if let Ok(std::net::IpAddr::V4(ip)) = std::net::UdpSocket::bind("0.0.0.0:0")
+            .and_then(|s| {
+                s.connect("10.255.255.255:1")?;
+                s.local_addr()
+            })
+            .map(|a| a.ip())
+        {
+            ips.push(ip);
+        }
+    }
+    // home networks first: 192.168.x.x, then 10.x.x.x, then 172.16-31.x.x, then the rest
+    ips.sort_by_key(|ip| match ip.octets() {
+        [192, 168, ..] => 0,
+        [10, ..] => 1,
+        [172, b, ..] if (16..32).contains(&b) => 2,
+        _ => 3,
+    });
+    ips.dedup();
+    ips
+}
+
 pub fn lan_ip() -> String {
-    std::net::UdpSocket::bind("0.0.0.0:0")
-        .and_then(|s| {
-            s.connect("10.255.255.255:1")?;
-            s.local_addr()
-        })
-        .map(|a| a.ip().to_string())
-        .unwrap_or_else(|_| "127.0.0.1".into())
+    lan_ips().first().map(|ip| ip.to_string()).unwrap_or_else(|| "127.0.0.1".into())
+}
+
+#[cfg(windows)]
+fn adapter_ips() -> Vec<std::net::Ipv4Addr> {
+    use windows_sys::Win32::NetworkManagement::IpHelper::{
+        GetAdaptersAddresses, GAA_FLAG_INCLUDE_GATEWAYS, GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_DNS_SERVER,
+        GAA_FLAG_SKIP_MULTICAST, IP_ADAPTER_ADDRESSES_LH,
+    };
+    use windows_sys::Win32::NetworkManagement::Ndis::IfOperStatusUp;
+    use windows_sys::Win32::Networking::WinSock::{AF_INET, SOCKADDR_IN};
+    const IF_TYPE_ETHERNET: u32 = 6;
+    const IF_TYPE_WIFI: u32 = 71;
+    const ERROR_BUFFER_OVERFLOW: u32 = 111;
+
+    let flags = GAA_FLAG_INCLUDE_GATEWAYS | GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER;
+    let mut size: u32 = 32 * 1024;
+    let mut buf: Vec<u64> = Vec::new();
+    for _ in 0..3 {
+        buf = vec![0u64; size as usize / 8 + 1];
+        let ret = unsafe {
+            GetAdaptersAddresses(AF_INET as u32, flags, std::ptr::null(), buf.as_mut_ptr().cast(), &mut size)
+        };
+        if ret == 0 {
+            break;
+        }
+        if ret != ERROR_BUFFER_OVERFLOW {
+            return vec![];
+        }
+    }
+    let mut out = Vec::new();
+    let mut adapter = buf.as_ptr() as *const IP_ADAPTER_ADDRESSES_LH;
+    unsafe {
+        while !adapter.is_null() {
+            let a = &*adapter;
+            let physical = a.IfType == IF_TYPE_ETHERNET || a.IfType == IF_TYPE_WIFI;
+            if a.OperStatus == IfOperStatusUp && physical && !a.FirstGatewayAddress.is_null() {
+                let mut unicast = a.FirstUnicastAddress;
+                while !unicast.is_null() {
+                    let sockaddr = (*unicast).Address.lpSockaddr;
+                    if !sockaddr.is_null() && (*sockaddr).sa_family == AF_INET {
+                        let sin = &*(sockaddr as *const SOCKADDR_IN);
+                        out.push(std::net::Ipv4Addr::from(u32::from_be(sin.sin_addr.S_un.S_addr)));
+                    }
+                    unicast = (*unicast).Next;
+                }
+            }
+            adapter = a.Next;
+        }
+    }
+    out
+}
+
+#[cfg(not(windows))]
+fn adapter_ips() -> Vec<std::net::Ipv4Addr> {
+    vec![]
 }
 
 pub fn find_wow_root(explicit: Option<&str>) -> Option<PathBuf> {

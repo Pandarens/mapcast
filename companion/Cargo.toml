@@ -1,6 +1,6 @@
 [package]
 name = "mapcast"
-version = "0.6.1"
+version = "0.6.2"
 edition = "2021"
 description = "MapCast companion: reads the addon's strip from the WoW window and serves the live map to phones"
 publish = false
@@ -33,6 +33,9 @@ windows-sys = { version = "0.61", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_HiDpi",
     "Win32_System_SystemInformation",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
+    "Win32_Networking_WinSock",
 ] }
 
 [profile.release]
