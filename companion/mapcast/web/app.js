@@ -51,8 +51,9 @@ const ctx = canvas.getContext("2d");
 
 const game = {
   connected: false, status: {}, session: null, map: null, image: null, world: null,
-  state: null, shown: null, group: [], roster: {}, zones: {}, travel: null, places: null, pins: null,
+  state: null, shown: null, group: [], roster: {}, zones: {}, travel: null, places: null, pins: null, shade: {},
 };
+const shadeImages = new Map(); // url -> { img, ready }: the darkened unexplored land, per zone
 
 const view = {
   cx: 0, cy: 0, scale: 1, rotation: 0, follow: true, headingUp: false, mode: "world",
@@ -292,6 +293,7 @@ function apply(type, data) {
     case "zones": game.zones = data || {}; break;
     case "travel": game.travel = data; break;
     case "pins": setPins(data); break;
+    case "explored": setShade(data); break;
     case "status": game.status = data || {}; break;
     default: return;
   }
@@ -301,7 +303,7 @@ function apply(type, data) {
 
 function handle(message) {
   if (message.type === "snapshot") {
-    for (const key of ["session", "map", "world", "zones", "travel", "pins", "roster", "group", "state", "status"]) {
+    for (const key of ["session", "map", "world", "zones", "travel", "pins", "explored", "roster", "group", "state", "status"]) {
       apply(key, message.data[key]);
     }
   } else {
@@ -341,11 +343,12 @@ function updateBar() {
   $("worldmode").hidden = !game.world;
   setButton("worldmode", view.mode === "world");
   const groups = pinGroups();
-  $("layers").hidden = !game.places && !groups.length;
+  const shaded = Object.keys(game.shade).length > 0;
+  $("layers").hidden = !game.places && !groups.length && !shaded;
   if ($("layers").hidden) $("layerpanel").hidden = true;
   for (const button of document.querySelectorAll("#layerpanel button[data-layer]")) {
     const key = button.dataset.layer;
-    button.hidden = key.startsWith("pins:") ? !groups.includes(key.slice(5)) : !game.places;
+    button.hidden = key.startsWith("pins:") ? !groups.includes(key.slice(5)) : key === "shade" ? !shaded : !game.places;
   }
 
   let notice = "";
@@ -589,7 +592,39 @@ function drawWorldArt() {
     const d = DETAIL_HINT[2] * smooth(DETAIL_HINT[0], DETAIL_HINT[1], zoom) + (1 - DETAIL_HINT[2]) * smooth(DETAIL_FADE[0], DETAIL_FADE[1], zoom);
     const alpha = 1 - (1 - d) * (1 - d);
     if (alpha > 0.003) drawZoneTiles(alpha);
+    drawShade(alpha);
   }
+}
+
+function setShade(data) {
+  game.shade = data || {};
+  for (const s of Object.values(game.shade)) {
+    if (shadeImages.has(s.url)) continue;
+    const entry = { img: new Image(), ready: false };
+    entry.img.onload = () => {
+      entry.ready = true;
+      needsDraw = true;
+    };
+    entry.img.src = s.url;
+    shadeImages.set(s.url, entry);
+  }
+}
+
+// Unexplored land darkened, as OpenMap's "dim": a zone not found at all from every zoom, the
+// pieces you haven't explored of the others with their zone's art
+function drawShade(detail) {
+  if (!layerOn("shade")) return;
+  const W = game.world.width;
+  const H = game.world.height;
+  for (const s of Object.values(game.shade)) {
+    const entry = shadeImages.get(s.url);
+    const alpha = s.missing ? 1 : detail;
+    if (!entry || !entry.ready || alpha < 0.01) continue;
+    const [l, r, t, b] = s.rect;
+    ctx.globalAlpha = alpha;
+    ctx.drawImage(entry.img, l * W, t * H, (r - l) * W, (b - t) * H);
+  }
+  ctx.globalAlpha = 1;
 }
 
 function drawLabels() {

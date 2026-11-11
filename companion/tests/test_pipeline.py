@@ -36,7 +36,7 @@ def test_full_chain_decodes_everything():
     assert info["mapID"] == 1429 and info["name"] == "Элвиннский лес" and info["parentMapID"] == 1415
     assert info["layers"][0]["tiles"] == [100000 + i for i in range(1, 13)]
     # the mouse-over-only overlay is not sent
-    assert [o["files"] for o in got["map"]["explored"]] == [[200001, 200002]]
+    assert [o["files"][0] for o in got["map"]["explored"]] == [2212713, 271572, 271560, 271567, 271576]
     assert got["roster"] == {101: {"classID": 1, "name": "Воин"}, 102: {"classID": 5, "name": "Жрица"}}
 
     mock, state = game.mock, got["state"]

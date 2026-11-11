@@ -19,6 +19,7 @@ from .icons import PinIcons
 from .maps import MapImages
 from .openmap import WorldImages
 from .protocol import Decoder
+from .shade import ZoneShades
 
 log = logging.getLogger(__name__)
 
@@ -34,8 +35,10 @@ class Hub:
         self.maps = maps
         self.world = world
         self.icons = icons or PinIcons(maps.cache_dir, maps)
+        self.shades = ZoneShades(maps.cache_dir)
+        self._zones: dict = {}
         self.snapshot: dict = {"session": None, "map": None, "world": None, "zones": {}, "travel": None,
-                               "pins": None, "state": None, "group": [], "roster": {}, "status": {}}
+                               "pins": None, "explored": {}, "state": None, "group": [], "roster": {}, "status": {}}
         self.clients: set[web.WebSocketResponse] = set()
         self._raw: dict[str, dict] = {}
 
@@ -49,7 +52,15 @@ class Hub:
         elif name == "pins":
             self._raw[name] = data
             data = self.icons.describe(data)
+        elif name == "explored":
+            self._raw[name] = data
+            world = self.snapshot.get("world")
+            self.shades.openmap = self.world.openmap
+            shades = self.shades.register(data, self._zones, (world["width"], world["height"]) if world else None)
+            data = {str(key): value for key, value in shades.items()}
         elif name in ("roster", "zones"):
+            if name == "zones":
+                self._zones = data
             data = {str(key): value for key, value in data.items()}
         elif name == "travel":
             data = {"nodes": {str(k): v for k, v in data["nodes"].items()},
@@ -58,6 +69,8 @@ class Hub:
             return
         self.snapshot[name] = data
         await self._broadcast({"type": name, "data": data})
+        if name in ("zones", "world") and "explored" in self._raw:  # the shades need the zones' rects
+            await self.publish("explored", self._raw["explored"])
 
     async def refresh(self) -> None:
         """Rebuild the map and world descriptions, e.g. after game data or OpenMap finished loading."""
@@ -213,6 +226,12 @@ def create_app(hub: Hub, token: str, public_url: str) -> web.Application:
     async def world_sea(_: web.Request):
         return await _file(hub.world.sea_path)
 
+    async def world_shade(request: web.Request):
+        key = request.match_info["key"]
+        if not re.fullmatch(r"[0-9a-f]{16}", key):
+            raise web.HTTPNotFound()
+        return await _file(hub.shades.shade_path, key)
+
     async def pin_icon(request: web.Request):
         key = request.match_info["key"]
         if not re.fullmatch(r"[0-9a-f]{16}", key):
@@ -242,6 +261,7 @@ def create_app(hub: Hub, token: str, public_url: str) -> web.Application:
     app.router.add_get("/world/sea.png", world_sea)
     app.router.add_get("/world/places.json", world_places)
     app.router.add_get("/icon/{key}.png", pin_icon)
+    app.router.add_get("/world/shade/{key}.png", world_shade)
     app.router.add_get(r"/world/zone/{level:\d+}/{i:\d+}_{j:\d+}", zone_tile)
     app.router.add_get("/favicon.ico", no_icon)
     app.router.add_static("/static/", WEB_DIR)

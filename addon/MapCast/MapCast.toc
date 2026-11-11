@@ -1,7 +1,7 @@
 ## Interface: 16001
 ## Title: MapCast
 ## Notes: Streams your map, position and map pins to a phone or tablet through the MapCast companion app.
-## Version: 0.4.0
+## Version: 0.5.0
 ## OptionalDeps: OpenMap, HandyNotes, TomTom, GatherMate2, Questie, RXPGuides
 ## SavedVariables: MapCastDB
 ## SavedVariablesPerCharacter: MapCastCharDB

@@ -27,6 +27,7 @@ from .blp import open_blp
 from .luadata import read_table
 from .maps import PARCHMENT, MapImages, placeholder
 from .places import YardsToWorld, build_places
+from .shade import parse_reveal
 
 log = logging.getLogger(__name__)
 
@@ -147,6 +148,7 @@ class OpenMapArt:
         self._locks_guard = threading.Lock()
         self._data_dir = data
         self._places = None
+        self._reveal = None
 
     def _texture_path(self, name: str) -> str | None:
         for ext in (".tga", ".blp", ".png"):
@@ -181,6 +183,21 @@ class OpenMapArt:
                     found.append(None)
             self._places = tuple(found) if any(found) else False
         return self._places or None
+
+    def reveal(self) -> dict:
+        """Every zone art's explored-area pieces (Data/<client>/Reveal.lua), read once."""
+        if self._reveal is None:
+            path = os.path.join(self._data_dir, "Reveal.lua")
+            try:
+                self._reveal = parse_reveal(_read(path)) if os.path.exists(path) else {}
+            except (ValueError, IndexError) as e:
+                log.warning("OpenMap Reveal.lua: %s", e)
+                self._reveal = {}
+        return self._reveal
+
+    def zone_mask(self, folder: str, map_id: int) -> str | None:
+        """One of OpenMap's per-zone masks (MapZoneLand: its land; MapZoneBorder: the land round it)."""
+        return self._texture_path(os.path.join(folder, str(map_id)))
 
     def edited_art(self, map_id: int, number: int) -> str | None:
         """OpenMap's hand-cleaned copy of an art tile (row-major, from 1), if it has one."""

@@ -15,8 +15,9 @@ MAX_CELL_PX = 8
 REC_STATE, REC_GROUP, REC_WORLD, REC_BULK = 0x01, 0x02, 0x03, 0x10
 REC_SESSION, REC_MAPINFO, REC_EXPLORED, REC_ROSTER = 0x20, 0x21, 0x22, 0x23
 REC_MAPRECT, REC_WORLDINFO, REC_CONTYARDS, REC_TAXINODES, REC_INSTNAMES = 0x24, 0x25, 0x26, 0x27, 0x28
+REC_ZONEEXPLORED = 0x29
 REC_PINSOURCES, REC_PINICONS, REC_PINTEXTS, REC_PINS = 0x30, 0x31, 0x32, 0x33
-CH_WORLD, CH_ZONES, CH_TRAVEL, CH_PINS = 4, 5, 6, 10
+CH_WORLD, CH_ZONES, CH_TRAVEL, CH_EXPLORED, CH_PINS = 4, 5, 6, 7, 10
 NO_INDEX = 0xFFFF
 FACTIONS = {1: "Alliance", 2: "Horde"}
 
@@ -271,6 +272,17 @@ def parse_roster(body: bytes) -> dict[int, dict]:
     return roster
 
 
+def parse_zone_explored(body: bytes) -> dict[int, dict]:
+    """Every zone's art and the explored-area pieces shown on it: (x, y, w, h) in its art's pixels."""
+    r = Reader(body)
+    zones = {}
+    for _ in range(r.u16()):
+        map_id, art_id, layer_w, layer_h = r.u32(), r.u32(), r.u16(), r.u16()
+        pieces = [[r.u16(), r.u16(), r.u16(), r.u16()] for _ in range(r.u8())]
+        zones[map_id] = {"art": art_id, "layer": [layer_w, layer_h], "pieces": pieces}
+    return zones
+
+
 def parse_pins_blob(blob: bytes) -> dict:
     """The pins channel: map addons' pins near the player, their icons and texts."""
     sources, icons, texts, raw = [], [], [], []
@@ -405,6 +417,12 @@ class Decoder:
             return [("travel", self._parse_travel_blob(blob))]
         if channel_id == CH_PINS:
             return [("pins", parse_pins_blob(blob))]
+        if channel_id == CH_EXPLORED:
+            explored = {}
+            for rtype, body in iter_records(blob):
+                if rtype == REC_ZONEEXPLORED:
+                    explored = parse_zone_explored(body)
+            return [("explored", explored)]
         events: list[tuple[str, object]] = []
         map_event: dict = {}
         for rtype, body in iter_records(blob):

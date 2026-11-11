@@ -74,7 +74,7 @@ first 3 cycles, then slowly), so a companion started later still gets
 everything without any back-channel. The companion applies a blob once it holds all `count` chunks
 of one `gen`.
 
-Channels: 1 session, 2 map, 3 roster, 4 world, 5 zones, 6 travel, 10 pins.
+Channels: 1 session, 2 map, 3 roster, 4 world, 5 zones, 6 travel, 7 explored, 10 pins.
 
 ## Blob records
 
@@ -146,6 +146,17 @@ or when the game's list marks it found while hiding others.
 `count u8`, then `instanceID u16 | name str`: the dungeons and raids of OpenMap's data, named by
 `GetRealZoneText(instanceID)` in the game's language. Empty when the client answers the same
 name for every ID.
+
+### 0x29 ZONEEXPLORED (channel 7)
+
+`count u16`, then per zone of every continent on the world:
+`mapID u32 | artID u32 | layerW u16 | layerH u16 | n u8`, then `n` times `x u16 | y u16 | w u16 | h u16`:
+the zone's art (`C_Map.GetMapArtID`) and size, and the explored-area pieces shown on it
+(`C_MapExplorationInfo.GetExploredMapTextures`, without the mouse-over ones), in its art's pixels.
+Sent again when the game reports new exploration (`MAP_EXPLORATION_UPDATED`). The companion
+matches the pieces against OpenMap's list of every zone art's pieces (Data/<client>/Reveal.lua)
+and darkens the rest, as OpenMap's "dim" does: a zone with none explored over its land and the
+land round it (OpenMap's MapZoneLand and MapZoneBorder masks), the others piece by piece.
 
 ## Pins (channel 10)
 

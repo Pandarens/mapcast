@@ -10,7 +10,8 @@ local SLOW_EVERY = 5 -- afterwards, one chunk per channel every N pages
 local REC_STATE, REC_GROUP, REC_WORLD, REC_BULK = 0x01, 0x02, 0x03, 0x10
 local REC_SESSION, REC_MAPINFO, REC_EXPLORED, REC_ROSTER = 0x20, 0x21, 0x22, 0x23
 local REC_MAPRECT, REC_WORLDINFO, REC_CONTYARDS, REC_TAXINODES, REC_INSTNAMES = 0x24, 0x25, 0x26, 0x27, 0x28
-local CH_SESSION, CH_MAP, CH_ROSTER, CH_WORLD, CH_ZONES, CH_TRAVEL, CH_PINS = 1, 2, 3, 4, 5, 6, 10
+local REC_ZONEEXPLORED = 0x29
+local CH_SESSION, CH_MAP, CH_ROSTER, CH_WORLD, CH_ZONES, CH_TRAVEL, CH_EXPLORED, CH_PINS = 1, 2, 3, 4, 5, 6, 7, 10
 local PINS_EVERY = 2 -- seconds between rereads of the map addons' pins (Pins.lua)
 
 -- The seamless world is Azeroth's map (uiMapID 947), the same space OpenMap stitches its zones in.
@@ -39,7 +40,7 @@ local seq, pageCounter, elapsedSinceTick = 0, 0, 0
 local currentMapID = 0
 local playerU, playerV -- the player on the world, when known
 local pinsMap, pinsAt = nil, -math.huge
-local mapDirty, rosterDirty, worldDirty, travelDirty = true, true, true, true
+local mapDirty, rosterDirty, worldDirty, travelDirty, exploredDirty = true, true, true, true, true
 local lastError
 
 ---------------------------------------------------------------------------
@@ -347,9 +348,8 @@ local function BuildWorld()
 	return blob
 end
 
--- Every zone of every continent: its name in the game's language and where it sits on the world.
-local function BuildZones()
-	local blob = ns.NewBuffer()
+-- fn(mapID) for every zone of every continent on the world map.
+local function ForEachZone(fn)
 	local ok, continents = pcall(C_Map.GetMapChildrenInfo, WORLD_MAP, CONTINENT_TYPE)
 	for _, continent in ipairs(ok and continents or {}) do
 		local contID = Safe(continent.mapID)
@@ -359,11 +359,60 @@ local function BuildZones()
 		end
 		for _, zone in ipairs(okZones and zones or {}) do
 			local mapID = Safe(zone.mapID)
-			if mapID and AppendMapRect(blob, mapID) then
-				AppendMapInfo(blob, mapID, true)
+			if mapID then
+				fn(mapID)
 			end
 		end
 	end
+end
+
+-- Every zone of every continent: its name in the game's language and where it sits on the world.
+local function BuildZones()
+	local blob = ns.NewBuffer()
+	ForEachZone(function(mapID)
+		if AppendMapRect(blob, mapID) then
+			AppendMapInfo(blob, mapID, true)
+		end
+	end)
+	return blob
+end
+
+-- What you have explored of every zone: its art and the explored-area pieces shown on it. The
+-- companion darkens the rest, as OpenMap does (it knows every zone's pieces from OpenMap's data).
+local function BuildExplored()
+	local zones, count = ns.NewBuffer(), 0
+	ForEachZone(function(mapID)
+		if not MapRectOnWorld(mapID) then
+			return
+		end
+		local artID = C_Map.GetMapArtID and Safe(C_Map.GetMapArtID(mapID))
+		local layers = C_Map.GetMapArtLayers(mapID) or {}
+		local layer = layers[1] or {}
+		local shown = {}
+		local explored = C_MapExplorationInfo and C_MapExplorationInfo.GetExploredMapTextures(mapID) or {}
+		for _, overlay in ipairs(explored) do
+			if not overlay.isShownByMouseOver and #shown < 255 then
+				shown[#shown + 1] = overlay
+			end
+		end
+		zones:u32(mapID)
+		zones:u32(IsNumber(artID) and artID or 0)
+		zones:u16(layer.layerWidth or 0)
+		zones:u16(layer.layerHeight or 0)
+		zones:u8(#shown)
+		for _, overlay in ipairs(shown) do
+			zones:u16(overlay.offsetX)
+			zones:u16(overlay.offsetY)
+			zones:u16(overlay.textureWidth)
+			zones:u16(overlay.textureHeight)
+		end
+		count = count + 1
+	end)
+	local body = ns.NewBuffer()
+	body:u16(count)
+	body:append(zones)
+	local blob = ns.NewBuffer()
+	blob:record(REC_ZONEEXPLORED, body)
 	return blob
 end
 
@@ -650,6 +699,10 @@ local function Tick()
 		travelDirty = false
 		Guard(function() SetChannel(CH_TRAVEL, BuildTravel()) end)
 	end
+	if exploredDirty then
+		exploredDirty = false
+		Guard(function() SetChannel(CH_EXPLORED, BuildExplored()) end)
+	end
 	local now = GetTime()
 	if ns.BuildPins and (currentMapID ~= pinsMap or now - pinsAt >= PINS_EVERY) then
 		pinsMap, pinsAt = currentMapID, now
@@ -701,7 +754,7 @@ driver:SetScript("OnEvent", function(_, event, arg1)
 		ApplySettings()
 	elseif event == "PLAYER_ENTERING_WORLD" then
 		Guard(function() SetChannel(CH_SESSION, BuildSession()) end)
-		mapDirty, rosterDirty, worldDirty, travelDirty = true, true, true, true
+		mapDirty, rosterDirty, worldDirty, travelDirty, exploredDirty = true, true, true, true, true
 		if ns.Strip.frame then
 			ns.Strip:Layout()
 		end
@@ -716,6 +769,8 @@ driver:SetScript("OnEvent", function(_, event, arg1)
 		travelDirty = true
 	elseif event == "PLAYER_LEVEL_UP" then
 		Guard(function() SetChannel(CH_SESSION, BuildSession(arg1)) end)
+	elseif event == "MAP_EXPLORATION_UPDATED" then
+		mapDirty, exploredDirty = true, true
 	else
 		mapDirty = true
 	end

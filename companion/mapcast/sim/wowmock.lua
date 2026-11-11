@@ -149,7 +149,7 @@ local CONTINENT_OF = { [1415] = 0, [1414] = 1 }
 local ZONES = {
 	[1429] = { "Элвиннский лес", 1415, 3470.83, 2314.58, 1535.42, -7939.58 },
 	[1436] = { "Западный Край", 1415, 3500.00, 2333.33, 3016.67, -9400.00 },
-	[1431] = { "Сумеречный лес", 1415, 2700.00, 1800.00, -416.67, -9716.67 },
+	[1431] = { "Сумеречный лес", 1415, 2700.00, 1800.00, 833.33, -9716.67 },
 	[1434] = { "Тернистая долина", 1415, 6381.25, 4254.17, 2220.83, -11168.75 },
 	[1426] = { "Дун Морог", 1415, 4925.00, 3283.33, 1802.08, -3877.08 },
 	[1432] = { "Лок Модан", 1415, 2758.33, 1839.58, -1993.75, -4487.50 },
@@ -267,14 +267,29 @@ function UnitFactionGroup() return M.faction, M.faction end
 function UnitLevel() return M.level end
 function GetRealZoneText(id) return M.instanceNames[id] or "" end
 
+-- The zones' art (UiMapArtID, as OpenMap's Data/Forever/Reveal.lua knows them: Elwynn Forest's and
+-- Duskwood's) and what of them is explored: the west of Elwynn, nothing of Duskwood.
+M.artIDs = { [1429] = 1228, [1431] = 1235 }
+function C_Map.GetMapArtID(mapID) return M.artIDs[mapID] end
+
+local function Overlay(w, h, x, y, files, mouseOver)
+	return { textureWidth = w, textureHeight = h, offsetX = x, offsetY = y, isShownByMouseOver = mouseOver or false,
+		fileDataIDs = files }
+end
+M.explored = {
+	[1429] = {
+		Overlay(485, 405, 0, 0, { 2212713, 2212714, 2212715, 2212716 }),
+		Overlay(256, 256, 381, 147, { 271572 }),
+		Overlay(225, 220, 422, 332, { 271560 }),
+		Overlay(240, 220, 250, 270, { 271567 }),
+		Overlay(256, 240, 238, 428, { 271576 }),
+		Overlay(128, 128, 10, 10, { 200003 }, true), -- shown only under the mouse: not sent
+	},
+	[1431] = {},
+}
 C_MapExplorationInfo = {}
-function C_MapExplorationInfo.GetExploredMapTextures()
-	return {
-		{ textureWidth = 300, textureHeight = 200, offsetX = 400, offsetY = 300, isShownByMouseOver = false,
-			fileDataIDs = { 200001, 200002 } },
-		{ textureWidth = 128, textureHeight = 128, offsetX = 10, offsetY = 10, isShownByMouseOver = true,
-			fileDataIDs = { 200003 } },
-	}
+function C_MapExplorationInfo.GetExploredMapTextures(mapID)
+	return M.explored[mapID] or {}
 end
 
 function GetPlayerFacing() return M.facing end
