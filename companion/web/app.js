@@ -323,6 +323,21 @@ function handle(message) {
 
 let retryDelay = 500;
 
+// A page left open keeps running the script it was loaded with. After each (re)connection the
+// companion's script is compared with that one, and the page reloads when the companion is newer.
+let loadedScript = null;
+
+function reloadIfUpdated() {
+  fetch("/static/app.js", { cache: "no-store" })
+    .then((r) => (r.ok ? r.text() : null))
+    .then((text) => {
+      if (text === null) return;
+      if (loadedScript === null) loadedScript = text;
+      else if (loadedScript !== text) location.reload();
+    })
+    .catch(() => {});
+}
+
 function connect() {
   const token = new URLSearchParams(location.search).get("t");
   const scheme = location.protocol === "https:" ? "wss://" : "ws://";
@@ -331,6 +346,7 @@ function connect() {
     game.connected = true;
     retryDelay = 500;
     updateBar();
+    reloadIfUpdated();
   };
   ws.onmessage = (e) => handle(JSON.parse(e.data));
   ws.onclose = () => {
