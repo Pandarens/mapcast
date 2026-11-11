@@ -15,7 +15,9 @@ MAX_CELL_PX = 8
 REC_STATE, REC_GROUP, REC_WORLD, REC_BULK = 0x01, 0x02, 0x03, 0x10
 REC_SESSION, REC_MAPINFO, REC_EXPLORED, REC_ROSTER = 0x20, 0x21, 0x22, 0x23
 REC_MAPRECT, REC_WORLDINFO, REC_CONTYARDS, REC_TAXINODES, REC_INSTNAMES = 0x24, 0x25, 0x26, 0x27, 0x28
-CH_WORLD, CH_ZONES, CH_TRAVEL = 4, 5, 6
+REC_PINSOURCES, REC_PINICONS, REC_PINTEXTS, REC_PINS = 0x30, 0x31, 0x32, 0x33
+CH_WORLD, CH_ZONES, CH_TRAVEL, CH_PINS = 4, 5, 6, 10
+NO_INDEX = 0xFFFF
 FACTIONS = {1: "Alliance", 2: "Horde"}
 
 STATE_FLAGS = ("hasPos", "hasFacing", "combat", "dead", "mounted", "flying", "instance", "resting")
@@ -269,6 +271,38 @@ def parse_roster(body: bytes) -> dict[int, dict]:
     return roster
 
 
+def parse_pins_blob(blob: bytes) -> dict:
+    """The pins channel: map addons' pins near the player, their icons and texts."""
+    sources, icons, texts, raw = [], [], [], []
+    for rtype, body in iter_records(blob):
+        r = Reader(body)
+        if rtype == REC_PINSOURCES:
+            sources = [r.str() for _ in range(r.u8())]
+        elif rtype == REC_PINICONS:
+            for _ in range(r.u16()):
+                file_id, path = r.u32(), r.str()
+                coords = [r.u16() / 65535.0 for _ in range(4)]
+                color = [r.u8() for _ in range(4)]
+                icons.append({"fileID": file_id or None, "path": path or None, "coords": coords, "color": color})
+        elif rtype == REC_PINTEXTS:
+            texts = [r.str() for _ in range(r.u16())]
+        elif rtype == REC_PINS:
+            for _ in range(r.u16()):
+                raw.append((r.u8(), world_coord(r.u32()), world_coord(r.u32()), r.u16(), r.u8(), r.u16(), r.u16(),
+                            r.u16(), r.u8()))
+
+    def text(i: int) -> str | None:
+        return texts[i] if i != NO_INDEX and i < len(texts) else None
+
+    pins = []
+    for source, u, v, icon, size, title, sub, label, flags in raw:
+        if source >= len(sources):
+            continue
+        pins.append({"source": source, "u": u, "v": v, "icon": icon if icon < len(icons) else None, "size": size,
+                     "title": text(title), "sub": text(sub), "label": text(label), "active": bool(flags & 1)})
+    return {"sources": sources, "icons": icons, "pins": pins}
+
+
 # ---------------------------------------------------------------------------
 # Stateful decoder
 
@@ -369,6 +403,8 @@ class Decoder:
             return [("zones", self._parse_zones_blob(blob))]
         if channel_id == CH_TRAVEL:
             return [("travel", self._parse_travel_blob(blob))]
+        if channel_id == CH_PINS:
+            return [("pins", parse_pins_blob(blob))]
         events: list[tuple[str, object]] = []
         map_event: dict = {}
         for rtype, body in iter_records(blob):

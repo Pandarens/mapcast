@@ -239,3 +239,91 @@ def test_level_up_updates_the_session():
     run(game, decoder, 30)
     game.mock.fire("PLAYER_LEVEL_UP", 31)
     assert run(game, decoder, 30)["session"]["level"] == 31
+
+
+def world_of(game, map_id, x, y):
+    left, right, top, bottom = lua_rect(game, map_id)
+    return left + x * (right - left), top + y * (bottom - top)
+
+
+def pins_by_source(pins):
+    out = {}
+    for pin in pins["pins"]:
+        out.setdefault(pins["sources"][pin["source"]], []).append(pin)
+    return out
+
+
+def test_pins_channel_mirrors_the_map_addons():
+    game, decoder = SimGame(), Decoder()
+    pins = run(game, decoder, 200)["pins"]
+    by = pins_by_source(pins)
+    assert set(by) == {"TomTom", "SilverDragon", "RestedXP", "Questie", "HandyNotes", "HandyNotes: Treasures",
+                       "GatherMate2: Herb Gathering", "GatherMate2: Mining"}  # not the disabled plugin
+
+    tomtom = by["TomTom"]
+    assert len(tomtom) == 1 and tomtom[0]["title"] == "Ферма Брекенридж"  # its HereBeDragons pin is not doubled
+    assert (tomtom[0]["u"], tomtom[0]["v"]) == pytest.approx(world_of(game, 1429, 0.42, 0.66), abs=1e-6)
+    assert pins["icons"][tomtom[0]["icon"]]["path"] == r"Interface\AddOns\TomTom\Images\GoldGreenDot"
+
+    # Questie: the faded-out icon and the one in Ashenvale are left out; the quest is the subtitle
+    questie = sorted(by["Questie"], key=lambda p: p["u"])
+    assert [(p["title"], p["sub"]) for p in questie] == [
+        ("Маршал Дуган", "Кобольды в шахте"), ("Волк", "Охота на волков"), ("Волк", "Охота на волков")]
+    assert pins["icons"][questie[1]["icon"]]["path"].endswith("slay.blp")
+
+    steps = sorted(by["RestedXP"], key=lambda p: p["label"])
+    assert [(p["label"], p["active"], p["icon"]) for p in steps] == [("12", True, None), ("13", False, None)]
+    assert steps[0]["title"] == "Поговорите с Маршалом Дуганом"
+
+    # HandyNotes: your note's title from its save, a plugin's from its tooltip, a node of the next zone too
+    assert by["HandyNotes"][0]["title"] == "Мой тайник"
+    star = pins["icons"][by["HandyNotes"][0]["icon"]]
+    assert star["coords"] == pytest.approx([0, 0.25, 0, 0.25], abs=1e-4)
+    assert sorted(p["title"] for p in by["HandyNotes: Treasures"]) == ["Сундук в Западном Крае", "Сундук с сокровищами"]
+    assert by["HandyNotes"][0]["size"] == 14  # 12 x its icon scale 1.2
+    assert not game.lua.eval("GameTooltip:IsShown()")
+
+    herbs = sorted(by["GatherMate2: Herb Gathering"], key=lambda p: p["u"])
+    assert [p["title"] for p in herbs] == ["Мироцвет", "Сребролист"]
+    assert (herbs[0]["u"], herbs[0]["v"]) == pytest.approx(world_of(game, 1429, 0.35, 0.6), abs=1e-6)
+    assert by["GatherMate2: Mining"][0]["title"] == "Медная жила"
+    assert pins["icons"][by["SilverDragon"][0]["icon"]]["fileID"] == 132320
+
+
+def test_pins_follow_the_addons_every_two_seconds():
+    game, decoder = SimGame(), Decoder()
+    run(game, decoder, 90)
+    game.lua.execute('TomTom.waypoints[1429]["new"] = { 1429, 0.5, 0.5, title = "Новая точка" }')
+    pins = run(game, decoder, 150)["pins"]
+    assert sorted(p["title"] for p in pins_by_source(pins)["TomTom"]) == ["Новая точка", "Ферма Брекенридж"]
+
+
+def test_no_tooltips_read_in_combat():
+    game = SimGame()
+    game.lua.execute("MockWoW.combat = true")
+    by = pins_by_source(run(game, Decoder(), 200)["pins"])
+    assert all(p["title"] is None for p in by["HandyNotes: Treasures"])
+
+
+def test_too_many_pins_keep_the_guide_and_waypoints():
+    game = SimGame()
+    game.lua.execute("""
+        local nodes = {}
+        for i = 1, 600 do
+            local x, y = 0.2 + (i % 30) / 50, 0.2 + math.floor(i / 30) / 40
+            nodes[math.floor(x * 10000 + 0.5) * 1000000 + math.floor(y * 10000 + 0.5) * 100] = 401
+        end
+        local get = LibStub("AceAddon-3.0"):GetAddon("GatherMate2").GetNodesForZone
+        LibStub("AceAddon-3.0"):GetAddon("GatherMate2").GetNodesForZone = function(self, zone, t)
+            if t == "Herb Gathering" and zone == 1429 then return next, nodes, nil end
+            return get(self, zone, t)
+        end""")
+    pins = run(game, Decoder(), 300)["pins"]
+    by = pins_by_source(pins)
+    assert len(pins["pins"]) == 400
+    assert len(by["TomTom"]) == 1 and len(by["RestedXP"]) == 2 and len(by["Questie"]) == 3
+
+
+def test_no_map_addons_no_pins():
+    pins = run(SimGame(map_addons=False), Decoder(), 150)["pins"]
+    assert pins == {"sources": [], "icons": [], "pins": []}

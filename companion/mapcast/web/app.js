@@ -35,6 +35,15 @@ const HORDE_ROUTE = [184, 33, 26];
 const FLIGHT_LINE = "rgb(255,214,102)";
 const FLIGHT_SHADE = "rgba(40,24,6,0.7)";
 const KIND_NAMES = { boat: "Корабль", zeppelin: "Цеппелин", airship: "Дирижабль" };
+// Map addons' pins: each addon a layer of its own, shown from its own zoom on the world map
+const PIN_GROUPS = ["Questie", "RestedXP", "TomTom", "HandyNotes", "GatherMate2", "other"];
+const PIN_GROUP_NAMES = { other: "Другие значки", RestedXP: "RestedXP Guide" };
+const PINS_FROM = { TomTom: 1.5, RestedXP: 1.5, other: 3 };
+const PIN_COLORS = { Questie: "#f5d22e", RestedXP: "#e0b04a", TomTom: "#44d07a", HandyNotes: "#5aa9e6", GatherMate2: "#9ad35a", other: "#d0d0d0" };
+const GATHER_NAMES = {
+  "Herb Gathering": "Травничество", Mining: "Горное дело", Fishing: "Рыбная ловля", "Extract Gas": "Газ",
+  Treasure: "Сокровища", Archaeology: "Археология", Logging: "Лесозаготовка",
+};
 
 const $ = (id) => document.getElementById(id);
 const canvas = $("map");
@@ -42,7 +51,7 @@ const ctx = canvas.getContext("2d");
 
 const game = {
   connected: false, status: {}, session: null, map: null, image: null, world: null,
-  state: null, shown: null, group: [], roster: {}, zones: {}, travel: null, places: null,
+  state: null, shown: null, group: [], roster: {}, zones: {}, travel: null, places: null, pins: null,
 };
 
 const view = {
@@ -67,7 +76,7 @@ function loadSettings() {
       for (const key of ["world", "zone"]) if (typeof s.zooms[key] === "number") view.zooms[key] = s.zooms[key];
     }
     if (s.layers && typeof s.layers === "object") {
-      for (const key of Object.keys(view.layers)) if (typeof s.layers[key] === "boolean") view.layers[key] = s.layers[key];
+      for (const [key, on] of Object.entries(s.layers)) if (typeof on === "boolean") view.layers[key] = on;
     }
   } catch (_) { /* storage unavailable */ }
 }
@@ -282,6 +291,7 @@ function apply(type, data) {
     case "session": game.session = data; break;
     case "zones": game.zones = data || {}; break;
     case "travel": game.travel = data; break;
+    case "pins": setPins(data); break;
     case "status": game.status = data || {}; break;
     default: return;
   }
@@ -291,7 +301,7 @@ function apply(type, data) {
 
 function handle(message) {
   if (message.type === "snapshot") {
-    for (const key of ["session", "map", "world", "zones", "travel", "roster", "group", "state", "status"]) {
+    for (const key of ["session", "map", "world", "zones", "travel", "pins", "roster", "group", "state", "status"]) {
       apply(key, message.data[key]);
     }
   } else {
@@ -330,8 +340,13 @@ function updateBar() {
   $("coords").textContent = st && st.hasPos ? `${(st.x * 100).toFixed(1)}, ${(st.y * 100).toFixed(1)}` : "";
   $("worldmode").hidden = !game.world;
   setButton("worldmode", view.mode === "world");
-  $("layers").hidden = !game.places;
-  if (!game.places) $("layerpanel").hidden = true;
+  const groups = pinGroups();
+  $("layers").hidden = !game.places && !groups.length;
+  if ($("layers").hidden) $("layerpanel").hidden = true;
+  for (const button of document.querySelectorAll("#layerpanel button[data-layer]")) {
+    const key = button.dataset.layer;
+    button.hidden = key.startsWith("pins:") ? !groups.includes(key.slice(5)) : !game.places;
+  }
 
   let notice = "";
   if (!game.connected) notice = "Нет связи с компаньоном на ПК. Он запущен? Телефон в той же Wi-Fi сети?";
@@ -372,11 +387,18 @@ function bindControls() {
     $("layerpanel").hidden = !$("layerpanel").hidden;
     setButton("layers", !$("layerpanel").hidden);
   };
+  for (const group of PIN_GROUPS) { // a button per map addon, shown once it has pins
+    const button = document.createElement("button");
+    button.dataset.layer = "pins:" + group;
+    button.textContent = PIN_GROUP_NAMES[group] || group;
+    button.hidden = true;
+    $("layerpanel").append(button);
+  }
   for (const button of document.querySelectorAll("#layerpanel button")) {
     const key = button.dataset.layer;
-    button.classList.toggle("on", view.layers[key]);
+    button.classList.toggle("on", layerOn(key));
     button.onclick = () => {
-      view.layers[key] = !view.layers[key];
+      view.layers[key] = !layerOn(key);
       button.classList.toggle("on", view.layers[key]);
       saveSettings();
       needsDraw = true;
@@ -873,6 +895,112 @@ function drawPlaces() {
 }
 
 // ---------------------------------------------------------------------------
+// Map addons' pins: HandyNotes, TomTom, GatherMate2, Questie, RestedXP and others
+
+const pinImages = new Map(); // url -> { img, ready }
+
+function layerOn(key) {
+  return view.layers[key] !== false;
+}
+
+function pinGroup(source) {
+  const addon = (source || "").split(":")[0];
+  return PIN_GROUPS.includes(addon) ? addon : "other";
+}
+
+function pinGroups() {
+  const pins = game.pins;
+  if (!pins || !pins.pins.length) return [];
+  return PIN_GROUPS.filter((g) => pins.pins.some((p) => pinGroup(pins.sources[p.source]) === g));
+}
+
+function sourceName(source) {
+  const [addon, rest] = source.split(/:\s*/, 2);
+  if (addon === "GatherMate2" && rest) return `GatherMate2: ${GATHER_NAMES[rest] || rest}`;
+  if (addon === "RestedXP") return "RestedXP Guide";
+  return source;
+}
+
+function setPins(data) {
+  game.pins = data && data.pins ? data : null;
+  if (!game.pins) return;
+  for (const url of data.icons) {
+    if (!url || pinImages.has(url)) continue;
+    const entry = { img: new Image(), ready: false };
+    entry.img.onload = () => {
+      entry.ready = true;
+      needsDraw = true;
+    };
+    entry.img.src = url;
+    pinImages.set(url, entry);
+  }
+}
+
+function drawLabelPin(x, y, label, active) {
+  ctx.font = `700 ${active ? 13 : 11}px system-ui, sans-serif`;
+  const r = Math.max(active ? 11 : 9, ctx.measureText(label).width / 2 + 4);
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, 2 * Math.PI);
+  ctx.fillStyle = "rgba(12,10,8,0.82)";
+  ctx.fill();
+  ctx.lineWidth = active ? 3 : 1.5;
+  ctx.strokeStyle = active ? "#ffd257" : "rgba(255,255,255,0.7)";
+  ctx.stroke();
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = "#fff";
+  ctx.fillText(label, x, y + 0.5);
+  return r;
+}
+
+function drawPins() {
+  const data = game.pins;
+  const zoom = data && game.world ? placesZoom() : null;
+  if (zoom === null) return;
+  ctx.save();
+  if (!worldMode()) { // on a zone's map: only over the map itself
+    const w = game.map.width;
+    const h = game.map.height;
+    ctx.beginPath();
+    [[0, 0], [w, 0], [w, h], [0, h]].forEach(([x, y], k) => {
+      const p = worldToScreen(x, y);
+      if (k) ctx.lineTo(p[0], p[1]);
+      else ctx.moveTo(p[0], p[1]);
+    });
+    ctx.clip();
+  }
+  const ordered = [...data.pins].sort((a, b) => a.active - b.active); // the active step on top
+  for (const pin of ordered) {
+    const group = pinGroup(data.sources[pin.source]);
+    if (!layerOn("pins:" + group)) continue;
+    const from = PINS_FROM[group] || 2.5;
+    const alpha = worldMode() ? smooth(from * 0.85, from, zoom) : 1;
+    if (alpha < 0.01) continue;
+    const p = placeToScreen(pin.u, pin.v);
+    if (!onScreen(p, 30)) continue;
+    ctx.globalAlpha = alpha;
+    const url = pin.icon !== null ? data.icons[pin.icon] : null;
+    const image = url && pinImages.get(url);
+    let r;
+    if (image && image.ready) {
+      const size = Math.max(14, pin.size * 1.15);
+      const k = size / Math.max(image.img.width, image.img.height);
+      const w = image.img.width * k;
+      const h = image.img.height * k;
+      ctx.drawImage(image.img, p[0] - w / 2, p[1] - h / 2, w, h);
+      r = size / 2;
+    } else if (pin.label) {
+      r = drawLabelPin(p[0], p[1], pin.label, pin.active);
+    } else {
+      r = 5;
+      disk(p[0], p[1], r, PIN_COLORS[group], "rgba(0,0,0,0.75)");
+    }
+    hits.push({ x: p[0], y: p[1], r: Math.max(r, 8), kind: "pin", item: pin });
+  }
+  ctx.restore();
+}
+
+// ---------------------------------------------------------------------------
 // The card a tap on a place opens
 
 function cardLine(text, cls, color) {
@@ -887,7 +1015,12 @@ function showCard(hit) {
   const card = $("card");
   card.replaceChildren();
   const item = hit.item;
-  if (hit.kind === "flight") {
+  if (hit.kind === "pin") {
+    const source = sourceName(game.pins.sources[item.source] || "");
+    card.append(cardLine(item.title || (item.label ? `Шаг ${item.label}` : source), "title"));
+    if (item.sub) card.append(cardLine(item.sub, "sub"));
+    card.append(cardLine(item.active ? `${source} · текущий шаг` : source, "bosses"));
+  } else if (hit.kind === "flight") {
     const info = travelNode(item.id);
     card.append(cardLine((info && info.name) || item.name, "title"));
     const state = info ? (info.known ? "изучена" : "не изучена") : "";
@@ -1062,6 +1195,7 @@ function draw() {
   }
   hits = [];
   drawPlaces();
+  drawPins();
 
   for (const m of game.group) drawMember(m);
 

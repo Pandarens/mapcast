@@ -16,6 +16,7 @@ from aiohttp import web
 
 from .app import Hub, Pipeline, create_app
 from .casc import CascError, LocalCasc, flavor_product
+from .icons import PinIcons
 from .maps import MapImages
 from .openmap import OpenMapArt, WorldImages, find_openmap
 
@@ -133,6 +134,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="mapcast", description=__doc__)
     parser.add_argument("--wow", help="WoW install folder (the one with .build.info)")
     parser.add_argument("--openmap", help="OpenMap addon folder, if not in the game's AddOns")
+    parser.add_argument("--addons", help="the game's AddOns folder, for map addons' pin icons (found by itself)")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--fps", type=int, default=30, help="screen captures per second")
     parser.add_argument("--sim", action="store_true", help="simulate the game, no WoW needed")
@@ -147,7 +149,8 @@ def main() -> None:
     cache_dir = data_dir("cache")
     maps = MapImages(cache_dir, None)
     world = WorldImages(cache_dir, maps)
-    hub = Hub(maps, world)
+    icons = PinIcons(cache_dir, maps)
+    hub = Hub(maps, world, icons)
 
     if args.sim:
         from .sim import SimSource
@@ -169,6 +172,7 @@ def main() -> None:
             if not args.sim:
                 maps.casc = open_casc(root)
             world.openmap = open_openmap(root, args.openmap, cache_dir)
+            icons.addons_dir = args.addons or (os.path.join(root, FLAVOR_DIR, "Interface", "AddOns") if root else None)
             asyncio.run_coroutine_threadsafe(hub.refresh(), loop)
             if world.openmap is not None:
                 world.openmap.warm()  # builds the zone tiles once; later runs read them from the cache

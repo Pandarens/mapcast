@@ -13,11 +13,11 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
 ADDON_DIR = os.path.join(REPO, "addon", "MapCast")
-ADDON_FILES = ("Protocol.lua", "Strip.lua", "MapCast.lua")
+ADDON_FILES = ("Protocol.lua", "Strip.lua", "MapCast.lua", "Pins.lua")
 
 
 class SimGame:
-    def __init__(self, phys=(1920, 1080), addon_dir: str = ADDON_DIR, openmap: bool = True):
+    def __init__(self, phys=(1920, 1080), addon_dir: str = ADDON_DIR, openmap: bool = True, map_addons: bool = True):
         from lupa import luajit21
 
         self.lua = luajit21.LuaRuntime(unpack_returned_tuples=True)
@@ -27,6 +27,9 @@ class SimGame:
         self.mock.physW, self.mock.physH = phys
         if not openmap:
             self.lua.execute("OpenMapAPI = nil")
+        if map_addons:  # HandyNotes, TomTom, GatherMate2, Questie, RestedXP: loaded before MapCast, as in the game
+            with open(os.path.join(HERE, "mapaddons.lua"), encoding="utf-8") as f:
+                self.lua.execute(f.read())
         self.ns = self.lua.table()
         load = self.lua.eval("function(src, name, ns) assert(loadstring(src, '@' .. name))('MapCast', ns) end")
         for name in ADDON_FILES:

@@ -10,7 +10,8 @@ local SLOW_EVERY = 5 -- afterwards, one chunk per channel every N pages
 local REC_STATE, REC_GROUP, REC_WORLD, REC_BULK = 0x01, 0x02, 0x03, 0x10
 local REC_SESSION, REC_MAPINFO, REC_EXPLORED, REC_ROSTER = 0x20, 0x21, 0x22, 0x23
 local REC_MAPRECT, REC_WORLDINFO, REC_CONTYARDS, REC_TAXINODES, REC_INSTNAMES = 0x24, 0x25, 0x26, 0x27, 0x28
-local CH_SESSION, CH_MAP, CH_ROSTER, CH_WORLD, CH_ZONES, CH_TRAVEL = 1, 2, 3, 4, 5, 6
+local CH_SESSION, CH_MAP, CH_ROSTER, CH_WORLD, CH_ZONES, CH_TRAVEL, CH_PINS = 1, 2, 3, 4, 5, 6, 10
+local PINS_EVERY = 2 -- seconds between rereads of the map addons' pins (Pins.lua)
 
 -- The seamless world is Azeroth's map (uiMapID 947), the same space OpenMap stitches its zones in.
 local WORLD_MAP = 947
@@ -36,6 +37,8 @@ local defaults = { enabled = true, cellPx = 3, cols = 256, rows = 2, interval = 
 local db, charDB
 local seq, pageCounter, elapsedSinceTick = 0, 0, 0
 local currentMapID = 0
+local playerU, playerV -- the player on the world, when known
+local pinsMap, pinsAt = nil, -math.huge
 local mapDirty, rosterDirty, worldDirty, travelDirty = true, true, true, true
 local lastError
 
@@ -135,6 +138,8 @@ local function WorldXY(mapID, x, y)
 		return rect[1] + x * (rect[2] - rect[1]), rect[3] + y * (rect[4] - rect[3])
 	end
 end
+
+ns.WorldXY, ns.MapRectOnWorld, ns.WorldFixed = WorldXY, MapRectOnWorld, WorldFixed
 
 local function AppendMapRect(blob, mapID)
 	local l, t = WorldXY(mapID, 0, 0)
@@ -544,6 +549,7 @@ local function AppendState(payload)
 
 	local x, y, facing, flags = 0, 0, 0, 0
 	local u, v
+	playerU, playerV = nil, nil
 	if mapID > 0 then
 		local px, py = UnitMapXY(mapID, "player")
 		if px then
@@ -574,6 +580,7 @@ local function AppendState(payload)
 	payload:record(REC_STATE, body)
 
 	if u then
+		playerU, playerV = u, v
 		local world = ns.NewBuffer()
 		world:u32(WorldFixed(u))
 		world:u32(WorldFixed(v))
@@ -642,6 +649,11 @@ local function Tick()
 	if travelDirty then
 		travelDirty = false
 		Guard(function() SetChannel(CH_TRAVEL, BuildTravel()) end)
+	end
+	local now = GetTime()
+	if ns.BuildPins and (currentMapID ~= pinsMap or now - pinsAt >= PINS_EVERY) then
+		pinsMap, pinsAt = currentMapID, now
+		Guard(function() SetChannel(CH_PINS, ns.BuildPins(currentMapID, playerU, playerV)) end)
 	end
 	Guard(AppendGroup, payload)
 	AppendBulk(payload, capacity)
@@ -751,6 +763,12 @@ local function Diagnose()
 		end
 	end
 	Print(("flight masters listed %d, learned %d"):format(#order, learned))
+	local counts = {}
+	for name, n in pairs(ns.pinStats or {}) do
+		counts[#counts + 1] = ("%s %d"):format(name, n)
+	end
+	table.sort(counts)
+	Print("pins sent: " .. (#counts > 0 and table.concat(counts, ", ") or "none"))
 	local f = GetPlayerFacing()
 	Print(("facing %s secret=%s"):format(tostring(f), tostring(IsSecret(f))))
 	local w, h = GetPhysicalScreenSize()

@@ -160,3 +160,4 @@ html, body {
 #card .sub { color: var(--muted); }
 #card .bosses { color: var(--muted); font-size: 13px; margin: 2px 0 8px; }
 #card .bosses:last-child { margin-bottom: 0; }
+#layerpanel button[hidden] { display: none; }

@@ -74,7 +74,7 @@ first 3 cycles, then slowly), so a companion started later still gets
 everything without any back-channel. The companion applies a blob once it holds all `count` chunks
 of one `gen`.
 
-Channels: 1 session, 2 map, 3 roster, 4 world, 5 zones, 6 travel, 10+ pins (phase 2).
+Channels: 1 session, 2 map, 3 roster, 4 world, 5 zones, 6 travel, 10 pins.
 
 ## Blob records
 
@@ -146,3 +146,45 @@ or when the game's list marks it found while hiding others.
 `count u8`, then `instanceID u16 | name str`: the dungeons and raids of OpenMap's data, named by
 `GetRealZoneText(instanceID)` in the game's language. Empty when the client answers the same
 name for every ID.
+
+## Pins (channel 10)
+
+What map addons put on the world map near the player, read from the addons' own data every 2
+seconds (and at once on a map change), so it works with the game's map closed:
+
+- TomTom: its waypoints (`TomTom.waypoints`), anywhere.
+- HereBeDragons-Pins (and Questie's copy, `HereBeDragonsQuestie-Pins-2.0`): every world map pin,
+  by the addon that registered it. Questie's carry the quest data (`frame.data`), RestedXP
+  Guide's the step (`frame.activeObject`); the active step is sent wherever it is.
+- HandyNotes: every enabled plugin's `GetNodes2` for the maps around. A node's title is your own
+  note's title, or else the first line of the plugin's tooltip (read out of combat, while no
+  tooltip is up, a few per round).
+- GatherMate2: `GetNodesForZone` for each shown kind of node.
+
+"Around" is the current map's rect on the world grown by half its size on each side, and the
+maps queried are the current one and the zones of its continent that meet it. At most 400 pins
+are sent: the waypoints and the guide first, then HandyNotes, then the rest, nearest first.
+
+### 0x30 PINSOURCES
+
+`count u8`, then `name str`: who placed the pins ("TomTom", "Questie", "RestedXP",
+"HandyNotes", "HandyNotes: <plugin>", "GatherMate2: <node kind>", or another addon's name).
+
+### 0x31 PINICONS
+
+`count u16`, then `fileID u32 | path str | left u16 | right u16 | top u16 | bottom u16 | r u8 | g u8 | b u8 | a u8`:
+a texture by its file ID (`path` empty) or, for an addon's own file, its path (`fileID` 0); the
+part of it shown (texture coordinates x 65535) and the colour it is tinted with.
+
+### 0x32 PINTEXTS
+
+`count u16`, then `str`: the texts the pins use, without colour codes or textures.
+
+### 0x33 PINS
+
+`count u16`, then per pin:
+`source u8 | u u32 | v u32 | icon u16 | size u8 | title u16 | sub u16 | label u16 | flags u8`
+
+`u`, `v` are world coordinates; `icon` indexes PINICONS, `title`, `sub` and `label` index
+PINTEXTS (0xFFFF: none). `size` is the icon's size on the game's map in pixels. `label` is text
+drawn as the pin (RestedXP's step numbers). flags: 1 active (the guide's current step).

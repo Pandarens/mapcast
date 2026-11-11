@@ -30,13 +30,31 @@ function Texture:SetSize(w, h) self.w, self.h = w, h end
 function Texture:Show() self.shown = true end
 function Texture:Hide() self.shown = false end
 function Texture:SetColorTexture(r, g, b, a) self.color = { r, g, b, a or 1 } end
+function Texture:GetObjectType() return "Texture" end
+function Texture:SetTexture(file) self.file = file end
+function Texture:GetTexture() return self.file end
+function Texture:GetTextureFileID() return type(self.file) == "number" and self.file or nil end
+function Texture:GetTextureFilePath() return self.file end
+function Texture:SetTexCoord(l, r, t, b) self.coords = { l, r, t, b } end
+function Texture:GetTexCoord()
+	local c = self.coords or { 0, 1, 0, 1 }
+	return c[1], c[3], c[1], c[4], c[2], c[3], c[2], c[4]
+end
+function Texture:SetVertexColor(r, g, b, a) self.vertex = { r, g, b, a or 1 } end
+function Texture:GetVertexColor() return unpack(self.vertex or { 1, 1, 1, 1 }) end
+
+local FontString = {}
+FontString.__index = FontString
+function FontString:GetObjectType() return "FontString" end
+function FontString:SetText(text) self.text = text end
+function FontString:GetText() return self.text end
 
 local Frame = {}
 Frame.__index = Frame
 
 function CreateFrame(kind, name, parent)
 	local f = setmetatable({ kind = kind, name = name, parent = parent, shown = true, points = {},
-		scripts = {}, events = {}, textures = {}, w = 0, h = 0 }, Frame)
+		scripts = {}, events = {}, textures = {}, regions = {}, w = 0, h = 0 }, Frame)
 	if name then
 		_G[name] = f
 	end
@@ -61,8 +79,16 @@ function Frame:RegisterEvent(e) self.events[e] = true end
 function Frame:CreateTexture()
 	local t = setmetatable({ points = {}, shown = true, w = 0, h = 0, color = { 0, 0, 0, 1 } }, Texture)
 	self.textures[#self.textures + 1] = t
+	self.regions[#self.regions + 1] = t
 	return t
 end
+function Frame:CreateFontString()
+	local fs = setmetatable({}, FontString)
+	self.regions[#self.regions + 1] = fs
+	return fs
+end
+function Frame:GetRegions() return unpack(self.regions) end
+function Frame:GetWidth() return self.w end
 
 function M.fire(event, ...)
 	for _, f in ipairs(M.frames) do
