@@ -23,7 +23,12 @@ const DETAIL_HINT = [1.8, 3, 0.3];
 const DETAIL_FADE = [3, 4.5];
 const LABELS_OUT = [3, 4];
 const DEFAULT_WORLD_PX = 5; // CSS px per world unit when the world view first opens: zones are in
-const MAX_WORLD_PX = 24; // closest zoom (the zone art has 16 px per world unit)
+const MAX_WORLD_PX = 72; // closest zoom (the zone art has 16 px per world unit; past it the minimap carries the detail)
+const MINI_FADE = [20, 34]; // zoom where the game's minimap blends into the painted map, as in OpenMap
+const MINI_DEEP = [30, 48]; // ... and where it takes over
+const MINI_MIX = 0.45; // how strong it is after the first fade
+const MINI_MOST = 0.85; // ... and at the deepest zoom
+const MINI_KEEP = 96; // minimap tiles kept decoded
 const TILE_KEEP = 48; // fine zone tiles kept decoded (each is about 1 MB of memory)
 const LAND_INK = "rgb(78,44,12)";
 const LAND_GLOW = "rgba(243,189,81,0.8)";
@@ -224,6 +229,7 @@ function setWorld(world) {
   game.world = world;
   game.places = null;
   tiles.clear();
+  miniTiles.clear();
   if (!world) return;
   if (world.places && world.places.url) {
     fetch(world.places.url)
@@ -344,7 +350,8 @@ function updateBar() {
   setButton("worldmode", view.mode === "world");
   const groups = pinGroups();
   const shaded = Object.keys(game.shade).length > 0;
-  $("layers").hidden = !game.places && !groups.length && !shaded;
+  const mini = !!(game.world && game.world.mini);
+  $("layers").hidden = !game.places && !groups.length && !shaded && !mini;
   if ($("layers").hidden) $("layerpanel").hidden = true;
   for (const button of document.querySelectorAll("#layerpanel button[data-layer]")) {
     const key = button.dataset.layer;
@@ -513,6 +520,77 @@ function tileImage(level, i, j, load) {
   return t.ready ? t.img : null;
 }
 
+// The game's minimap up close: real buildings, streets and trees where the painted map has no pixels left.
+const miniTiles = new Map();
+
+function miniImage(file) {
+  let t = miniTiles.get(file);
+  if (!t) {
+    t = { ready: false, used: 0, img: new Image() };
+    t.img.onload = () => {
+      t.ready = true;
+      needsDraw = true;
+    };
+    t.img.src = game.world.mini.url.replace("{file}", file);
+    miniTiles.set(file, t);
+  }
+  t.used = tileClock;
+  return t.ready ? t.img : null;
+}
+
+function miniAlpha(zoom) {
+  return MINI_MIX * smooth(MINI_FADE[0], MINI_FADE[1], zoom) + (MINI_MOST - MINI_MIX) * smooth(MINI_DEEP[0], MINI_DEEP[1], zoom);
+}
+
+function drawMinimap(zoom) {
+  const mini = game.world.mini;
+  if (!mini || !layerOn("mini")) return;
+  const alpha = miniAlpha(zoom);
+  if (alpha < 0.01) return;
+  const W = game.world.width;
+  const H = game.world.height;
+  const [x0, y0, x1, y1] = visibleBox();
+  const zones = Object.values(game.zones || {}).filter((z) => z.rect);
+  ctx.save();
+  if (zones.length) { // only over the zones' maps: the minimap's open sea is a flat blue
+    ctx.beginPath();
+    for (const zone of zones) {
+      const [l, r, t, b] = zone.rect;
+      ctx.rect(l * W, t * H, (r - l) * W, (b - t) * H);
+    }
+    ctx.clip();
+  }
+  ctx.globalAlpha = alpha;
+  const pad = 0.75 / view.scale; // hide hairline seams between tiles
+  for (const c of mini.continents) {
+    if (!c.files) c.files = new Map(c.tiles);
+    if (!(c.du > 0) || !(c.dv > 0)) continue;
+    const w = c.du * W;
+    const h = c.dv * H;
+    const ox = c.u0 * W;
+    const oy = c.v0 * H;
+    const i0 = Math.max(0, Math.floor((x0 - ox) / w));
+    const i1 = Math.min(mini.grid - 1, Math.floor((x1 - ox) / w));
+    const j0 = Math.max(0, Math.floor((y0 - oy) / h));
+    const j1 = Math.min(mini.grid - 1, Math.floor((y1 - oy) / h));
+    for (let i = i0; i <= i1; i++) {
+      for (let j = j0; j <= j1; j++) {
+        const file = c.files.get(i * mini.grid + j);
+        if (!file) continue;
+        const img = miniImage(file);
+        if (img) ctx.drawImage(img, ox + i * w, oy + j * h, w + pad, h + pad);
+      }
+    }
+  }
+  ctx.restore();
+}
+
+function evictMinimap() {
+  if (miniTiles.size <= MINI_KEEP) return;
+  const old = [...miniTiles.entries()].filter(([, t]) => t.used < tileClock).sort((a, b) => a[1].used - b[1].used);
+  for (const [file] of old.slice(0, miniTiles.size - MINI_KEEP)) miniTiles.delete(file);
+}
+
 function evictTiles() {
   const zones = game.world && game.world.zones;
   if (!zones || tiles.size <= TILE_KEEP) return;
@@ -592,6 +670,7 @@ function drawWorldArt() {
     const d = DETAIL_HINT[2] * smooth(DETAIL_HINT[0], DETAIL_HINT[1], zoom) + (1 - DETAIL_HINT[2]) * smooth(DETAIL_FADE[0], DETAIL_FADE[1], zoom);
     const alpha = 1 - (1 - d) * (1 - d);
     if (alpha > 0.003) drawZoneTiles(alpha);
+    drawMinimap(zoom);
     drawShade(alpha);
   }
 }
@@ -1227,6 +1306,7 @@ function draw() {
   if (world) {
     drawLabels();
     evictTiles();
+    evictMinimap();
   }
   hits = [];
   drawPlaces();

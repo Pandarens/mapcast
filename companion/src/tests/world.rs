@@ -5,7 +5,7 @@ use crate::hub::Hub;
 use crate::icons::{cut_and_tint, PinIcons};
 use crate::imaging::load_image;
 use crate::maps::MapImages;
-use crate::openmap::{find_openmap, parse_art_edits, parse_world_labels, parse_zone_art, OpenMapArt, WorldImages};
+use crate::openmap::{find_openmap, parse_art_edits, parse_minimap, parse_world_labels, parse_zone_art, OpenMapArt, WorldImages};
 use crate::places::{build_places, YardsToWorld};
 use crate::shade::{parse_reveal, ZoneShades};
 use crate::web::{router, App};
@@ -419,4 +419,12 @@ async fn web_routes_serve_the_world() {
     assert_eq!(get(&app, "/qr").await.0, StatusCode::FORBIDDEN); // only on the PC itself
     let (status, body) = get(&app, "/static/app.js").await;
     assert!(status == StatusCode::OK && body.len() > 1000);
+}
+
+#[test]
+fn minimap_tiles_are_read_per_continent() {
+    let text = "local _, ns = ...\nns.MapMinimap = {\n\t[0] = {\n\t\t[1527] = 5313059, [1526] = 5313057,\n\t},\n\t[1] = { [65] = 7 },\n}\n";
+    let minimap = parse_minimap(text);
+    assert_eq!(minimap[&0], vec![(1526, 5313057), (1527, 5313059)]);
+    assert_eq!(minimap[&1], vec![(65, 7)]);
 }

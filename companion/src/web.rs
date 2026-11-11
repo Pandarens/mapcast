@@ -206,7 +206,8 @@ async fn serve_socket(app: App, mut socket: WebSocket) {
 
 pub fn router(app: App) -> Router {
     let hub = app.hub.clone();
-    let (h1, h2, h3, h4, h5, h6, h7) = (hub.clone(), hub.clone(), hub.clone(), hub.clone(), hub.clone(), hub.clone(), hub);
+    let (h1, h2, h3, h4, h5, h6, h7, h8) =
+        (hub.clone(), hub.clone(), hub.clone(), hub.clone(), hub.clone(), hub.clone(), hub.clone(), hub);
     Router::new()
         .route("/", get(index))
         .route("/qr", get(qr))
@@ -253,6 +254,13 @@ pub fn router(app: App) -> Router {
                     return StatusCode::NOT_FOUND.into_response();
                 };
                 cached_file(move || om.zone_tile(level, i, j)).await
+            }
+        }))
+        .route("/world/mini/{file}", get(move |UrlPath(file): UrlPath<String>| {
+            let hub = h8.clone();
+            async move {
+                let Ok(file) = file.parse::<u32>() else { return StatusCode::NOT_FOUND.into_response() };
+                cached_file(move || hub.world.minimap_path(file)).await
             }
         }))
         .route("/icon/{key}", get(move |UrlPath(key): UrlPath<String>| {

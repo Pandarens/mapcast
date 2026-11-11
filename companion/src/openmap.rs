@@ -6,6 +6,10 @@
 //! hand-cleaned art for the world and continent maps (Media/Textures/<client>/MapArt, listed in
 //! Data/<client>/ArtEdits.lua). This module reads those files and serves them to the phone: the
 //! world and continent art as single images, the zone tiles as a pyramid of zoom levels.
+//!
+//! Up close the painted map runs out of pixels, and OpenMap lays the game's minimap over it
+//! (Map/Close.lua). Data/<client>/Minimap.lua lists the minimap's tiles per continent; they are
+//! read from the game's files and the page blends them in from the same zoom.
 
 use crate::imaging::{self, PARCHMENT};
 use crate::luadata::{field, positional, read_table};
@@ -16,7 +20,7 @@ use crate::util::{content_key, hex_key, write_atomic};
 use image::{Rgba, RgbaImage};
 use rayon::prelude::*;
 use serde_json::{json, Value};
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
@@ -25,6 +29,8 @@ pub const SEA_COLOR: [u8; 3] = [128, 125, 105]; // OpenMap's sea where no art pa
 pub const SEA_REACH: f64 = 1.5; // how far past the world art its outer sea runs, in world widths
 const FEATHER_EDGE: f64 = 0.08; // share of each side faded out when OpenMap's feather mask is not at hand
 const TEXTURE_EXTS: [&str; 3] = ["tga", "blp", "png"];
+const MINIMAP_TILE_YARDS: f64 = 1600.0 / 3.0; // a minimap tile's side
+const MINIMAP_GRID: u32 = 64; // tiles a side; tile (x, y) has the key x * 64 + y
 
 /// OpenMap's addon folder: the one given, or the one in the game's AddOns.
 pub fn find_openmap(wow_root: Option<&Path>, explicit: Option<&str>) -> Option<PathBuf> {
@@ -71,6 +77,23 @@ pub fn parse_art_edits(text: &str) -> HashMap<u32, HashSet<u32>> {
             if let Ok(id) = k.parse::<u32>() {
                 out.insert(id, positional(&v).iter().filter_map(Value::as_u64).map(|n| n as u32).collect());
             }
+        }
+    }
+    out
+}
+
+/// ns.MapMinimap: [continent][x * 64 + y] = file ID (tile x runs east, y south).
+pub fn parse_minimap(text: &str) -> BTreeMap<i64, Vec<(u32, u32)>> {
+    let mut out = BTreeMap::new();
+    if let Ok(Value::Object(continents)) = read_table(text, "MapMinimap") {
+        for (k, v) in continents {
+            let (Ok(continent), Value::Object(tiles)) = (k.parse::<i64>(), v) else { continue };
+            let mut list: Vec<(u32, u32)> = tiles
+                .iter()
+                .filter_map(|(key, file)| Some((key.parse::<u32>().ok()?, file.as_u64()? as u32)))
+                .collect();
+            list.sort();
+            out.insert(continent, list);
         }
     }
     out
@@ -129,6 +152,8 @@ pub struct OpenMapArt {
     pub zone_art: ZoneArt,
     pub art_edits: HashMap<u32, HashSet<u32>>,
     pub labels: Vec<Value>,
+    pub minimap: BTreeMap<i64, Vec<(u32, u32)>>,
+    pub minimap_files: HashSet<u32>,
     pub version: String,
     pub feather: Option<PathBuf>,
     pub sea: Option<PathBuf>,
@@ -148,6 +173,8 @@ impl OpenMapArt {
         let zone_art = parse_zone_art(&read_text(&zone_art_path).ok_or("no ZoneArt.lua")?)?;
         let art_edits = read_text(&data_dir.join("ArtEdits.lua")).map(|t| parse_art_edits(&t)).unwrap_or_default();
         let labels = read_text(&data_dir.join("Labels.lua")).map(|t| parse_world_labels(&t)).unwrap_or_default();
+        let minimap = read_text(&data_dir.join("Minimap.lua")).map(|t| parse_minimap(&t)).unwrap_or_default();
+        let minimap_files = minimap.values().flatten().map(|&(_, file)| file).collect();
         let version = toc_version(addon_dir);
         let meta = std::fs::metadata(&zone_art_path).map_err(|e| e.to_string())?;
         let mtime = meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
@@ -160,7 +187,7 @@ impl OpenMapArt {
             levels.push(next);
         }
         let mut art = OpenMapArt {
-            data_dir, tex, zone_art, art_edits, labels, version, feather: None, sea: None,
+            data_dir, tex, zone_art, art_edits, labels, minimap, minimap_files, version, feather: None, sea: None,
             stamp, cache_dir, levels, locks: Mutex::new(HashMap::new()), places: OnceLock::new(), reveal: OnceLock::new(),
         };
         art.feather = art.texture_path("MapFeatherWide");
@@ -338,17 +365,14 @@ impl WorldImages {
                "sea": {"color": SEA_COLOR, "reach": SEA_REACH, "url": sea_url},
                "labels": labels, "zones": om.as_ref().map(|o| o.describe()).unwrap_or(Value::Null),
                "places": self.register_places(world, &maps, om.as_deref()),
+               "mini": self.register_minimap(&Self::yards_to_world(world, &maps), om.as_deref()),
                "openmapInGame": world.get("openmap").cloned().unwrap_or(json!(false)),
                "openmapVersion": world.get("openmapVersion").cloned().unwrap_or(json!(""))})
     }
 
     /// OpenMap's flights, docks, sailings and dungeon entrances, placed by the continents' yards.
     fn register_places(&self, world: &Value, maps: &[&Value], om: Option<&OpenMapArt>) -> Value {
-        let rects: HashMap<String, [f64; 4]> = maps.iter().filter_map(|m| {
-            let r = m["rect"].as_array()?;
-            Some((m["mapID"].to_string(), [num(&r[0]), num(&r[1]), num(&r[2]), num(&r[3])]))
-        }).collect();
-        let to_world = YardsToWorld::new(&world["yards"], &rects);
+        let to_world = Self::yards_to_world(world, maps);
         let data = om.and_then(|o| o.places_data());
         let (Some((flights, places)), false) = (data, to_world.is_empty()) else {
             *self.places.lock().unwrap() = None;
@@ -360,6 +384,54 @@ impl WorldImages {
         let key = h.digest().to_string()[..12].to_string();
         *self.places.lock().unwrap() = Some((key.clone(), blob));
         json!({"url": format!("/world/places.json?v={key}")})
+    }
+
+    /// World yards -> Azeroth's map, from the continents' corners the addon sent.
+    fn yards_to_world(world: &Value, maps: &[&Value]) -> YardsToWorld {
+        let rects: HashMap<String, [f64; 4]> = maps.iter().filter_map(|m| {
+            let r = m["rect"].as_array()?;
+            Some((m["mapID"].to_string(), [num(&r[0]), num(&r[1]), num(&r[2]), num(&r[3])]))
+        }).collect();
+        YardsToWorld::new(&world["yards"], &rects)
+    }
+
+    /// The minimap's tiles for the page: per continent, where tile (0, 0) lies on the world,
+    /// a tile's size there, and each tile's key (x * 64 + y) with its file.
+    fn register_minimap(&self, to_world: &YardsToWorld, om: Option<&OpenMapArt>) -> Value {
+        let Some(om) = om else { return Value::Null };
+        if !self.maps.has_casc() {
+            return Value::Null;
+        }
+        let half = MINIMAP_GRID as f64 / 2.0;
+        let mut continents = Vec::new();
+        for (continent, tiles) in &om.minimap {
+            // tile (x, y)'s north-west corner is at ((32 - y) * side, (32 - x) * side) yards
+            let c = json!(continent);
+            let first = to_world.place(&c, half * MINIMAP_TILE_YARDS, half * MINIMAP_TILE_YARDS);
+            let next = to_world.place(&c, (half - 1.0) * MINIMAP_TILE_YARDS, (half - 1.0) * MINIMAP_TILE_YARDS);
+            let (Some((u0, v0)), Some((u1, v1))) = (first, next) else { continue };
+            continents.push(json!({"continent": continent, "u0": u0, "v0": v0, "du": u1 - u0, "dv": v1 - v0,
+                                   "tiles": tiles.iter().map(|(key, file)| json!([key, file])).collect::<Vec<_>>()}));
+        }
+        if continents.is_empty() {
+            return Value::Null;
+        }
+        json!({"grid": MINIMAP_GRID, "continents": continents, "url": format!("/world/mini/{{file}}?v={}", om.stamp)})
+    }
+
+    /// Path of a minimap tile as WebP, read from the game's files on first use. Blocking.
+    pub fn minimap_path(&self, file: u32) -> Option<PathBuf> {
+        let om = self.openmap()?;
+        if !om.minimap_files.contains(&file) {
+            return None;
+        }
+        let path = self.cache_dir.join("mini").join(format!("{file}.webp"));
+        if path.exists() {
+            return Some(path);
+        }
+        let image = self.maps.texture(file)?;
+        write_atomic(&path, &imaging::webp_bytes(&image, 84.0)).ok()?;
+        Some(path)
     }
 
     pub fn places_json(&self) -> Option<Vec<u8>> {
