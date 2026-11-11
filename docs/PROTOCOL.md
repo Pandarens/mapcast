@@ -10,11 +10,18 @@ the game window. The companion app captures that region and decodes it.
   of the WoW client area. Cells are row-major.
 - Cell 0 is magenta `(255,0,255)`, cell 1 is green `(0,255,0)`. The decoder
   finds `S` from the length of the magenta run on pixel row 0.
-- Cell 2 is geometry: `(W & 255, W >> 8, R)`.
-- Cells 3.. carry the page bytes, 3 bytes per cell in R, G, B order. Unused
-  cells are black.
+- A cell carries three 4-bit values, one per colour channel (R, G, B), each as
+  one of 16 shades: value `n` is brightness `n * 17`.
+- Cells 2..17 are the 16 shades in order, as greys `(n*17, n*17, n*17)`. The
+  decoder reads them back and takes every later value as the nearest shade of
+  its channel, so HDR, gamma or a colour profile shifting the colours does not
+  break the data. Shades closer than 4 apart are reported as distorted.
+- Cells 18, 19 are geometry: `(W & 15, (W >> 4) & 15, (W >> 8) & 15)` and
+  `(R - 1, 0, 0)`.
+- Cells 20.. carry the page bytes as a stream of 4-bit values, three per cell,
+  a byte's low half first. Unused cells are black.
 
-Defaults: `S = 1`, `W = 512`, `R = 1` (a 512 x 1 px line, about 1.5 KB per page).
+Defaults: `S = 1`, `W = 1024`, `R = 1` (a 1024 x 1 px line, about 1.5 KB per page).
 
 ## Page
 

@@ -1,9 +1,16 @@
 -- The strip: a grid of solid-color squares in the top-left screen corner that
--- the companion app reads. Each square is exactly cellPx x cellPx physical
--- pixels so captured colors stay exact.
+-- the companion app reads. Each square is exactly cellPx x cellPx physical pixels.
+--
+-- A square carries three 4-bit values, one per colour channel, as one of 16 evenly
+-- spaced shades. The strip starts with all 16 shades in order, so the companion reads
+-- them back as they really arrive: HDR, gamma or a colour profile may shift the shades,
+-- and the data still decodes. See docs/PROTOCOL.md.
 local _, ns = ...
 
 local floor = math.floor
+
+local SHADE = 17 -- 255 / 15: the step between two shades
+local RAMP_AT, GEOMETRY_AT, HEADER = 2, 18, 20 -- cells: 2 markers, 16 shades, 2 of geometry
 
 local Strip = {}
 ns.Strip = Strip
@@ -25,9 +32,9 @@ function Strip:CellCount()
 	return self.cols * self.rows
 end
 
--- Bytes available for one page (cells 0-2 are markers and geometry).
+-- Bytes available for one page: three half-bytes a cell after the header.
 function Strip:PageCapacity()
-	return (self:CellCount() - 3) * 3
+	return floor((self:CellCount() - HEADER) * 3 / 2)
 end
 
 function Strip:Layout()
@@ -63,7 +70,12 @@ function Strip:Layout()
 	self.colors = {}
 	self:SetCell(0, 255, 0, 255)
 	self:SetCell(1, 0, 255, 0)
-	self:SetCell(2, self.cols % 256, floor(self.cols / 256), self.rows)
+	for k = 0, 15 do
+		self:SetCell(RAMP_AT + k, k * SHADE, k * SHADE, k * SHADE)
+	end
+	local cols = self.cols
+	self:SetCell(GEOMETRY_AT, (cols % 16) * SHADE, (floor(cols / 16) % 16) * SHADE, (floor(cols / 256) % 16) * SHADE)
+	self:SetCell(GEOMETRY_AT + 1, (self.rows - 1) * SHADE, 0, 0)
 end
 
 function Strip:SetCell(i, r, g, b)
@@ -74,11 +86,20 @@ function Strip:SetCell(i, r, g, b)
 	end
 end
 
+-- Half-byte j (from 0) of the page: a byte's low half first, then its high half.
+local function Nibble(bytes, j)
+	local byte = bytes[floor(j / 2) + 1] or 0
+	if j % 2 == 0 then
+		return byte % 16
+	end
+	return floor(byte / 16)
+end
+
 function Strip:Paint(bytes)
-	local k = 1
-	for i = 3, self:CellCount() - 1 do
-		self:SetCell(i, bytes[k] or 0, bytes[k + 1] or 0, bytes[k + 2] or 0)
-		k = k + 3
+	local j = 0
+	for i = HEADER, self:CellCount() - 1 do
+		self:SetCell(i, Nibble(bytes, j) * SHADE, Nibble(bytes, j + 1) * SHADE, Nibble(bytes, j + 2) * SHADE)
+		j = j + 3
 	end
 end
 

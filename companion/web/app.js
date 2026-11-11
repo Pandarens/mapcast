@@ -9,11 +9,11 @@ const PROBLEMS = {
   "WoW window not found": "Окно WoW не найдено. Запусти игру в оконном режиме или «полноэкранном в окне».",
   "no strip in the top-left corner": "Не вижу полоску аддона в левом верхнем углу игры. Проверь, что аддон MapCast включён (/mapcast on) и угол окна ничем не закрыт.",
   "strip markers not recognized": "Полоска аддона читается неправильно. Попробуй /mapcast cell 4.",
-  "colors are distorted: set in-game Gamma/Brightness/Contrast to defaults": "Цвета искажены: верни в игре гамму, яркость и контраст к значениям по умолчанию.",
+  "colors are distorted: the strip's shades cannot be told apart": "Цвета полоски искажены так, что оттенки не различить. Верни в игре гамму, яркость и контраст к значениям по умолчанию и проверь, что аддон MapCast той же версии, что и компаньон.",
   "the addon has not sent data yet": "Аддон запускается…",
   "page checksum failed": "Ошибки при чтении полоски. Проверь гамму и яркость в игре.",
   "no new data from the addon": "Нет новых данных от аддона. Игра свёрнута или окно перекрыто?",
-  "capture region smaller than the strip": "Окно игры слишком маленькое для полоски.",
+  "capture region smaller than the strip": "Окно игры уже полоски. Сделай окно шире или уменьши полоску: /mapcast cols 512, /mapcast rows 2.",
 };
 
 // The seamless world, faded in by zoom the way OpenMap does (Map/Stitch.lua). Its zoom 1 is the whole

@@ -34,7 +34,7 @@ local INSTANCES = {
 local floor, min, max, ceil, pi = math.floor, math.min, math.max, math.ceil, math.pi
 
 -- layout: bumped when the default strip shape changes, so saved shapes follow it
-local defaults = { enabled = true, layout = 2, cellPx = 1, cols = 512, rows = 1, interval = 0.1 }
+local defaults = { enabled = true, layout = 3, cellPx = 1, cols = 1024, rows = 1, interval = 0.1 }
 
 local db, charDB
 local seq, pageCounter, elapsedSinceTick = 0, 0, 0
@@ -839,7 +839,7 @@ end
 local HELP = {
 	"/mapcast on | off - show or hide the strip",
 	"/mapcast cell <1-8> - square size in pixels (default 1)",
-	"/mapcast cols <16-1024>, rows <1-16> - strip size (default 512 x 1)",
+	"/mapcast cols <128-2048>, rows <1-16> - strip size (default 1024 x 1)",
 	"/mapcast rate <0.03-1> - seconds between pages (default 0.1)",
 	"/mapcast diag - check what the game lets the addon read",
 }
@@ -854,7 +854,7 @@ SlashCmdList.MAPCAST = function(msg)
 	elseif cmd == "cell" and num and num >= 1 and num <= 8 then
 		db.cellPx = floor(num)
 		ApplySettings()
-	elseif cmd == "cols" and num and num >= 16 and num <= 1024 then
+	elseif cmd == "cols" and num and num >= 128 and num <= 2048 then
 		db.cols = floor(num)
 		ApplySettings()
 	elseif cmd == "rows" and num and num >= 1 and num <= 16 then

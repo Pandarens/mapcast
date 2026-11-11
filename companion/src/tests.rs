@@ -54,7 +54,7 @@ fn full_chain_decodes_everything() {
     let got = run(&game, &mut decoder, 90);
     assert_eq!(decoder.bad_pages, 0);
     let g = decoder.geometry.unwrap();
-    assert_eq!((g.cell, g.cols, g.rows), (1, 512, 1));
+    assert_eq!((g.cell, g.cols, g.rows), (1, 1024, 1));
     assert_eq!(got["session"], json!({"addonVersion": 2, "interface": 16001, "locale": "ruRU", "player": "Тестер",
                                        "realm": "Тестовый мир", "classID": 8, "faction": "Alliance", "level": 30}));
     let info = &got["map"]["info"];
@@ -87,7 +87,7 @@ fn position_precision_is_16_bit() {
 
 #[test]
 fn strip_settings_still_decode() {
-    for commands in [vec!["cell 1"], vec!["cell 4", "cols 128", "rows 4"], vec!["cell 8", "cols 64"]] {
+    for commands in [vec!["cell 1"], vec!["cols 128", "rows 4", "cell 4"], vec!["cols 128", "rows 3", "cell 8"]] {
         let game = game();
         for c in &commands {
             game.slash(c).unwrap();
@@ -157,10 +157,31 @@ fn distorted_colors_are_reported() {
     game.step(0.2);
     let mut img = game.render(1024, 48);
     for v in img.rgb.iter_mut() {
-        *v = ((*v as f64) * 0.92 + 8.0).clamp(0.0, 255.0) as u8; // e.g. gamma / brightness changed
+        *v = (*v / 64) * 64; // crushed to four shades a channel: nothing left to tell apart
     }
+    img.rgb[..6].copy_from_slice(&[255, 0, 255, 0, 255, 0]);
     decoder.feed(&img);
     assert!(decoder.problem.contains("distorted"));
+}
+
+#[test]
+fn shifted_colors_still_decode() {
+    // what HDR, gamma or a colour profile do: every shade moves, their order stays
+    let game = game();
+    let mut decoder = Decoder::new();
+    let mut latest = HashMap::new();
+    for _ in 0..200 {
+        game.step(1.0 / 30.0);
+        let mut img = game.render(1024, 48);
+        for v in img.rgb.iter_mut() {
+            *v = ((*v as f64 / 255.0).powf(0.7) * 235.0 + 12.0).round() as u8;
+        }
+        for (name, data) in decoder.feed(&img) {
+            latest.insert(name, data);
+        }
+    }
+    assert_eq!(decoder.bad_pages, 0);
+    assert!(has_all(&latest, &BULK) && latest.contains_key("state"));
 }
 
 #[test]
@@ -219,8 +240,9 @@ fn no_world_position_where_the_game_hides_it() {
 fn shrinking_the_strip_mid_stream_recuts_the_blobs() {
     let game = game();
     run(&game, &mut Decoder::new(), 90);
+    game.slash("cols 128").unwrap();
+    game.slash("rows 2").unwrap(); // a 354 byte page: the 400 byte chunks no longer fit
     game.slash("cell 8").unwrap();
-    game.slash("cols 64").unwrap(); // a 375 byte page: the 400 byte chunks no longer fit
     let mut decoder = Decoder::new();
     let got = run_sized(&game, &mut decoder, 200, 1024, 64);
     assert_eq!(decoder.bad_pages, 0);

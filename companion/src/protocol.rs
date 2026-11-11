@@ -32,6 +32,11 @@ pub const CH_PINS: u8 = 10;
 const NO_INDEX: u16 = 0xFFFF;
 const MARKER_TOLERANCE: i32 = 40;
 const MAX_CELL_PX: usize = 8;
+const SHADES: usize = 16; // a colour channel carries 4 bits as one of 16 shades
+const RAMP_AT: usize = 2; // cells 2..18: the 16 shades in order, to read them back as they arrive
+const GEOMETRY_AT: usize = 18; // cells 18, 19: columns (3 half-bytes) and rows - 1
+const HEADER_CELLS: usize = 20;
+const MIN_SHADE_GAP: i32 = 4; // neighbouring shades closer than this cannot be told apart
 const STATE_FLAGS: [&str; 8] = ["hasPos", "hasFacing", "combat", "dead", "mounted", "flying", "instance", "resting"];
 
 pub type Event = (String, Value);
@@ -129,10 +134,6 @@ fn near(p: [u8; 3], c: [i32; 3]) -> bool {
     (0..3).all(|i| (p[i] as i32 - c[i]).abs() <= MARKER_TOLERANCE)
 }
 
-fn exact(p: [u8; 3], c: [i32; 3]) -> bool {
-    (0..3).all(|i| p[i] as i32 == c[i])
-}
-
 const MAGENTA: [i32; 3] = [255, 0, 255];
 const GREEN: [i32; 3] = [0, 255, 0];
 
@@ -149,8 +150,35 @@ impl Geometry {
     }
 }
 
-/// Locate the strip at the image's top-left. Returns the geometry or the problem.
-pub fn find_geometry(img: &Frame) -> Result<Geometry, &'static str> {
+/// The 16 shades of each colour channel as the capture shows them. HDR, gamma or a colour
+/// profile shift them; values are read as the nearest shade, so the data survives.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Shades {
+    levels: [[u8; SHADES]; 3],
+}
+
+impl Shades {
+    /// The 4-bit value a channel's captured brightness stands for.
+    fn value(&self, channel: usize, seen: u8) -> u8 {
+        let mut best = 0;
+        let mut best_gap = i32::MAX;
+        for (k, level) in self.levels[channel].iter().enumerate() {
+            let gap = (*level as i32 - seen as i32).abs();
+            if gap < best_gap {
+                best_gap = gap;
+                best = k;
+            }
+        }
+        best as u8
+    }
+
+    fn cell(&self, p: [u8; 3]) -> [u8; 3] {
+        [self.value(0, p[0]), self.value(1, p[1]), self.value(2, p[2])]
+    }
+}
+
+/// Locate the strip at the image's top-left. Returns its geometry and shades, or the problem.
+pub fn find_geometry(img: &Frame) -> Result<(Geometry, Shades), &'static str> {
     if img.height < 1 || img.width < 3 {
         return Err("capture too small");
     }
@@ -164,35 +192,49 @@ pub fn find_geometry(img: &Frame) -> Result<Geometry, &'static str> {
     if cell > MAX_CELL_PX || 3 * cell > img.width || !(0..cell).all(|i| near(img.pixel(cell + i, 0), GREEN)) {
         return Err("strip markers not recognized");
     }
-    if !(exact(img.pixel(0, 0), MAGENTA) && exact(img.pixel(cell, 0), GREEN)) {
-        return Err("colors are distorted: set in-game Gamma/Brightness/Contrast to defaults");
-    }
     let c = cell / 2;
-    if img.height <= c {
+    if img.height <= c || img.width < HEADER_CELLS * cell {
         return Err("capture too small");
     }
-    let g = img.pixel(2 * cell + c, c);
-    let cols = g[0] as usize | (g[1] as usize) << 8;
-    let rows = g[2] as usize;
-    if cols < 4 || !(1..=16).contains(&rows) {
+    let at = |i: usize| img.pixel(i * cell + c, c);
+    let mut levels = [[0u8; SHADES]; 3];
+    for k in 0..SHADES {
+        let p = at(RAMP_AT + k);
+        for channel in 0..3 {
+            levels[channel][k] = p[channel];
+        }
+    }
+    let told_apart = levels.iter().all(|l| l.windows(2).all(|w| w[1] as i32 - w[0] as i32 >= MIN_SHADE_GAP));
+    if !told_apart {
+        return Err("colors are distorted: the strip's shades cannot be told apart");
+    }
+    let shades = Shades { levels };
+    let g = shades.cell(at(GEOMETRY_AT));
+    let cols = g[0] as usize | (g[1] as usize) << 4 | (g[2] as usize) << 8;
+    let rows = shades.cell(at(GEOMETRY_AT + 1))[0] as usize + 1;
+    if cols < HEADER_CELLS {
         return Err("bad strip geometry");
     }
-    Ok(Geometry { cell, cols, rows })
+    Ok((Geometry { cell, cols, rows }, shades))
 }
 
-pub fn read_page_bytes(img: &Frame, geo: &Geometry) -> Option<Vec<u8>> {
+/// The page's bytes: three half-bytes a cell after the header, a byte's low half first.
+pub fn read_page_bytes(img: &Frame, geo: &Geometry, shades: &Shades) -> Option<Vec<u8>> {
     let (w, h) = geo.size_px();
     if img.width < w || img.height < h {
         return None;
     }
     let c = geo.cell / 2;
-    let mut out = Vec::with_capacity(geo.rows * geo.cols * 3);
-    for row in 0..geo.rows {
-        for col in 0..geo.cols {
-            if row == 0 && col < 3 {
-                continue;
+    let cells = geo.cols * geo.rows;
+    let mut out = Vec::with_capacity((cells - HEADER_CELLS) * 3 / 2);
+    let mut low: Option<u8> = None;
+    for i in HEADER_CELLS..cells {
+        let p = img.pixel((i % geo.cols) * geo.cell + c, (i / geo.cols) * geo.cell + c);
+        for half in shades.cell(p) {
+            match low.take() {
+                None => low = Some(half),
+                Some(l) => out.push(l | half << 4),
             }
-            out.extend_from_slice(&img.pixel(col * geo.cell + c, row * geo.cell + c));
         }
     }
     Some(out)
@@ -426,8 +468,8 @@ impl Decoder {
     }
 
     pub fn feed(&mut self, img: &Frame) -> Vec<Event> {
-        let geo = match find_geometry(img) {
-            Ok(g) => g,
+        let (geo, shades) = match find_geometry(img) {
+            Ok(found) => found,
             Err(problem) => {
                 self.geometry = None;
                 self.problem = problem.into();
@@ -435,7 +477,7 @@ impl Decoder {
             }
         };
         self.geometry = Some(geo);
-        let data = match read_page_bytes(img, &geo) {
+        let data = match read_page_bytes(img, &geo, &shades) {
             Some(d) => d,
             None => {
                 self.problem = "capture region smaller than the strip".into();

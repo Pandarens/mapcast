@@ -1,4 +1,7 @@
 //! Captures the top-left corner of the WoW window, where the addon draws the strip.
+//!
+//! The corner is copied from the screen while the game is in view. When another window covers it
+//! the game window is asked to draw itself instead (PrintWindow), which is slower but sees it.
 
 use crate::protocol::Frame;
 
@@ -19,12 +22,20 @@ mod win {
     use windows_sys::Win32::Foundation::{HWND, LPARAM, POINT, RECT};
     use windows_sys::Win32::Graphics::Gdi::{
         BitBlt, ClientToScreen, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC,
-        GetDIBits, ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, SRCCOPY,
+        GetDIBits, ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HDC, SRCCOPY,
     };
     use windows_sys::Win32::UI::HiDpi::{SetProcessDpiAwareness, PROCESS_PER_MONITOR_DPI_AWARE};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetClassNameW, GetClientRect, GetWindowTextW, IsIconic, IsWindow, IsWindowVisible,
     };
+
+    // user32's PrintWindow: draws a window into a DC even while other windows cover it.
+    #[link(name = "user32")]
+    extern "system" {
+        fn PrintWindow(hwnd: HWND, hdc: HDC, flags: u32) -> BOOL;
+    }
+    const PW_CLIENTONLY: u32 = 1;
+    const PW_RENDERFULLCONTENT: u32 = 2; // what the compositor shows: needed for a game's 3D window
 
     const WOW_TITLE: &str = "World of Warcraft";
     const WOW_CLASSES: [&str; 3] = ["waApplication Window", "GxWindowClass", "GxWindowClassD3d"];
@@ -70,17 +81,13 @@ mod win {
         }
     }
 
-    /// A copy of a screen rectangle as RGB (the same pixels a screenshot has).
-    fn grab_screen(x: i32, y: i32, w: i32, h: i32) -> Option<Frame> {
+    /// A rectangle of a DC as RGB. `screen` is the display DC the copy's bitmap is made for.
+    fn copy_rect(screen: HDC, source: HDC, x: i32, y: i32, w: i32, h: i32) -> Option<Frame> {
         unsafe {
-            let screen = GetDC(std::ptr::null_mut());
-            if screen.is_null() {
-                return None;
-            }
             let mem = CreateCompatibleDC(screen);
             let bitmap = CreateCompatibleBitmap(screen, w, h);
             let old = SelectObject(mem, bitmap);
-            let ok = BitBlt(mem, 0, 0, w, h, screen, x, y, SRCCOPY) != 0;
+            let ok = BitBlt(mem, 0, 0, w, h, source, x, y, SRCCOPY) != 0;
             let mut info: BITMAPINFO = std::mem::zeroed();
             info.bmiHeader = BITMAPINFOHEADER {
                 biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
@@ -100,7 +107,6 @@ mod win {
             SelectObject(mem, old);
             DeleteObject(bitmap);
             DeleteDC(mem);
-            ReleaseDC(std::ptr::null_mut(), screen);
             if rows == 0 {
                 return None;
             }
@@ -112,6 +118,50 @@ mod win {
             }
             Some(frame)
         }
+    }
+
+    /// A copy of a screen rectangle as RGB (the same pixels a screenshot has).
+    fn grab_screen(x: i32, y: i32, w: i32, h: i32) -> Option<Frame> {
+        unsafe {
+            let screen = GetDC(std::ptr::null_mut());
+            if screen.is_null() {
+                return None;
+            }
+            let frame = copy_rect(screen, screen, x, y, w, h);
+            ReleaseDC(std::ptr::null_mut(), screen);
+            frame
+        }
+    }
+
+    /// The top-left corner of a window's client area, drawn by the window itself: works while
+    /// other windows cover it (not while it is minimized). The whole client area has to be
+    /// drawn to get the corner, so this costs tens of milliseconds.
+    fn grab_window(hwnd: HWND, client_w: i32, client_h: i32, w: i32, h: i32) -> Option<Frame> {
+        unsafe {
+            let screen = GetDC(std::ptr::null_mut());
+            if screen.is_null() {
+                return None;
+            }
+            let full_dc = CreateCompatibleDC(screen);
+            let full = CreateCompatibleBitmap(screen, client_w, client_h);
+            let old = SelectObject(full_dc, full);
+            let drawn = PrintWindow(hwnd, full_dc, PW_CLIENTONLY | PW_RENDERFULLCONTENT) != 0;
+            let frame = if drawn { copy_rect(screen, full_dc, 0, 0, w, h) } else { None };
+            SelectObject(full_dc, old);
+            DeleteObject(full);
+            DeleteDC(full_dc);
+            ReleaseDC(std::ptr::null_mut(), screen);
+            frame
+        }
+    }
+
+    /// Whether a capture starts with the strip's magenta marker.
+    fn has_strip(frame: &Frame) -> bool {
+        if frame.width == 0 || frame.height == 0 {
+            return false;
+        }
+        let p = frame.pixel(0, 0);
+        p[0] > 200 && p[1] < 60 && p[2] > 200
     }
 
     pub struct ScreenSource {
@@ -160,7 +210,13 @@ mod win {
             if width <= 0 || height <= 0 {
                 return None;
             }
-            grab_screen(x, y, width, height)
+            let on_screen = grab_screen(x, y, width, height);
+            if on_screen.as_ref().is_some_and(has_strip) {
+                return on_screen;
+            }
+            // not in view: another window is over the corner
+            let hwnd = self.hwnd?;
+            grab_window(hwnd, w, h, width, height).filter(has_strip).or(on_screen)
         }
     }
 }
