@@ -33,7 +33,8 @@ local INSTANCES = {
 
 local floor, min, max, ceil, pi = math.floor, math.min, math.max, math.ceil, math.pi
 
-local defaults = { enabled = true, cellPx = 3, cols = 256, rows = 2, interval = 0.1 }
+-- layout: bumped when the default strip shape changes, so saved shapes follow it
+local defaults = { enabled = true, layout = 2, cellPx = 1, cols = 512, rows = 1, interval = 0.1 }
 
 local db, charDB
 local seq, pageCounter, elapsedSinceTick = 0, 0, 0
@@ -746,6 +747,9 @@ driver:SetScript("OnEvent", function(_, event, arg1)
 		db = MapCastDB
 		MapCastCharDB = MapCastCharDB or {}
 		charDB = MapCastCharDB
+		if db.layout ~= defaults.layout then
+			db.layout, db.cellPx, db.cols, db.rows = nil, nil, nil, nil
+		end
 		for k, v in pairs(defaults) do
 			if db[k] == nil then
 				db[k] = v
@@ -834,8 +838,8 @@ end
 
 local HELP = {
 	"/mapcast on | off - show or hide the strip",
-	"/mapcast cell <1-8> - square size in pixels (default 3)",
-	"/mapcast cols <16-1024>, rows <1-16> - strip size (default 256 x 2)",
+	"/mapcast cell <1-8> - square size in pixels (default 1)",
+	"/mapcast cols <16-1024>, rows <1-16> - strip size (default 512 x 1)",
 	"/mapcast rate <0.03-1> - seconds between pages (default 0.1)",
 	"/mapcast diag - check what the game lets the addon read",
 }

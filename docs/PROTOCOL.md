@@ -14,7 +14,7 @@ the game window. The companion app captures that region and decodes it.
 - Cells 3.. carry the page bytes, 3 bytes per cell in R, G, B order. Unused
   cells are black.
 
-Defaults: `S = 3`, `W = 256`, `R = 2` (a 768 x 6 px strip, about 1.5 KB per page).
+Defaults: `S = 1`, `W = 512`, `R = 1` (a 512 x 1 px line, about 1.5 KB per page).
 
 ## Page
 

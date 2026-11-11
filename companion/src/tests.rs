@@ -54,7 +54,7 @@ fn full_chain_decodes_everything() {
     let got = run(&game, &mut decoder, 90);
     assert_eq!(decoder.bad_pages, 0);
     let g = decoder.geometry.unwrap();
-    assert_eq!((g.cell, g.cols, g.rows), (3, 256, 2));
+    assert_eq!((g.cell, g.cols, g.rows), (1, 512, 1));
     assert_eq!(got["session"], json!({"addonVersion": 2, "interface": 16001, "locale": "ruRU", "player": "Тестер",
                                        "realm": "Тестовый мир", "classID": 8, "faction": "Alliance", "level": 30}));
     let info = &got["map"]["info"];
