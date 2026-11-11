@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#16130f">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>MapCast</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<canvas id="map"></canvas>
+
+<header id="bar">
+  <span id="dot" class="dot" title="Связь"></span>
+  <span id="zone">Ждём данные из игры…</span>
+  <span id="coords"></span>
+</header>
+
+<div id="notice" hidden></div>
+
+<nav id="controls">
+  <button id="follow" class="on" aria-label="Следовать за персонажем" title="Следовать за персонажем">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/><circle cx="12" cy="12" r="7" fill="none"/></svg>
+  </button>
+  <button id="worldmode" class="on" hidden aria-label="Карта мира или карта зоны" title="Карта мира / карта зоны">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none"/><path d="M3 12h18M12 3c3 3.2 3 14.8 0 18M12 3c-3 3.2-3 14.8 0 18" fill="none"/></svg>
+  </button>
+  <button id="rotate" aria-label="Поворачивать карту по взгляду" title="Север вверху / по взгляду">
+    <svg viewBox="0 0 24 24"><path d="M12 3l4 9h-8z"/><path d="M12 21l-4-9h8z" fill="none"/></svg>
+  </button>
+  <button id="zoomin" aria-label="Приблизить">
+    <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+  </button>
+  <button id="zoomout" aria-label="Отдалить">
+    <svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg>
+  </button>
+  <button id="fullscreen" aria-label="Во весь экран">
+    <svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" fill="none"/></svg>
+  </button>
+</nav>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
