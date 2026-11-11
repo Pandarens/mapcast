@@ -199,3 +199,11 @@ part of it shown (texture coordinates x 65535) and the colour it is tinted with.
 `u`, `v` are world coordinates; `icon` indexes PINICONS, `title`, `sub` and `label` index
 PINTEXTS (0xFFFF: none). `size` is the icon's size on the game's map in pixels. `label` is text
 drawn as the pin (RestedXP's step numbers). flags: 1 active (the guide's current step).
+
+## Finding the companion
+
+The phone app finds the companion without its address being typed: it sends the UDP datagram
+`MAPCAST?` to the broadcast address of its Wi-Fi network (and to 255.255.255.255) on port 8765;
+the companion, listening on UDP at its web port, answers the sender with
+`MAPCAST http://<its LAN address>:<port>`. The token is never sent this way: the page asks for
+it once and keeps it in a cookie.

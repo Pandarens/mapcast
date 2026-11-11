@@ -4,6 +4,7 @@
 mod blp;
 mod capture;
 mod casc;
+mod discovery;
 mod hub;
 mod icons;
 mod imaging;
@@ -216,6 +217,7 @@ fn main() {
         }
     }).ok();
 
+    discovery::serve(args.port, url.clone()); // the phone app finds this PC by itself
     let app = web::App { hub, token: token.clone(), public_url: url.clone() };
     let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().expect("runtime");
     runtime.block_on(async move {

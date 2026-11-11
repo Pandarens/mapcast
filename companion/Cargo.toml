@@ -1,6 +1,6 @@
 [package]
 name = "mapcast"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2021"
 description = "MapCast companion: reads the addon's strip from the WoW window and serves the live map to phones"
 publish = false
