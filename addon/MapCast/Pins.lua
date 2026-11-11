@@ -1,6 +1,7 @@
 -- MapCast pins: what map addons put on the world map (HandyNotes, TomTom, GatherMate2, Questie,
 -- RestedXP Guide and anything else drawing through HereBeDragons), around where you are.
 -- They are read from the addons' own data, so the phone shows them with the game's map closed.
+-- The quests in your log are pins too ("Quests"): where the game's own map marks them.
 local _, ns = ...
 
 local REC_PINSOURCES, REC_PINICONS, REC_PINTEXTS, REC_PINS = 0x30, 0x31, 0x32, 0x33
@@ -20,7 +21,8 @@ local HBD_LIBS = {
 }
 local TOMTOM_ICON = "Interface\\AddOns\\TomTom\\Images\\GoldGreenDot"
 -- the order pins are kept in when there are too many
-local PRIORITY = { TomTom = 1, RestedXP = 1, HandyNotes = 2, Questie = 3, GatherMate2 = 4 }
+local PRIORITY = { TomTom = 1, RestedXP = 1, Quests = 2, HandyNotes = 2, Questie = 3, GatherMate2 = 4 }
+local QUEST_SAME = 0.002 -- one quest's marks this close on the world are one (a city's and its zone's)
 
 local function IsSecret(v)
 	return v ~= nil and issecretvalue ~= nil and issecretvalue(v)
@@ -497,6 +499,68 @@ local function NearbyMaps(mapID, box)
 end
 
 ---------------------------------------------------------------------------
+-- The quests in your log, where the game's map marks them (as OpenMap's Map/Quests.lua reads them)
+
+local function QuestTitle(id)
+	if C_QuestLog.GetTitleForQuestID then
+		local ok, title = pcall(C_QuestLog.GetTitleForQuestID, id)
+		return ok and title or nil
+	end
+end
+
+-- What is left to do, as the quest log words it.
+local function QuestObjectives(id)
+	local count, line = _G.GetNumQuestLeaderBoards, _G.GetQuestLogLeaderBoard
+	if not (C_QuestLog.GetLogIndexForQuestID and count and line) then
+		return nil
+	end
+	local ok, index = pcall(C_QuestLog.GetLogIndexForQuestID, id)
+	index = ok and Safe(index)
+	if not IsNumber(index) then
+		return nil
+	end
+	local okCount, n = pcall(count, index)
+	n = okCount and Safe(n)
+	local left = {}
+	for i = 1, IsNumber(n) and min(n, 8) or 0 do
+		local okLine, text, _, finished = pcall(line, i, index)
+		text = okLine and Safe(text)
+		if type(text) == "string" and text ~= "" and not Safe(finished) then
+			left[#left + 1] = text
+		end
+	end
+	return #left > 0 and table.concat(left, "; ") or nil
+end
+
+local function CollectQuests(c, maps)
+	if not (C_QuestLog and C_QuestLog.GetQuestsOnMap) then
+		return
+	end
+	local seen = {}
+	for _, mapID in ipairs(maps) do
+		local ok, quests = pcall(C_QuestLog.GetQuestsOnMap, mapID)
+		for _, q in ipairs(ok and type(quests) == "table" and quests or {}) do
+			local id, x, y = Safe(q.questID), Safe(q.x), Safe(q.y)
+			if IsNumber(id, x, y) and not Safe(q.isMapIndicatorQuest) then
+				local u, v = ns.WorldXY(mapID, x, y)
+				local key = IsNumber(u, v) and (id .. ":" .. floor(u / QUEST_SAME) .. ":" .. floor(v / QUEST_SAME))
+				if key and not seen[key] then
+					seen[key] = true
+					local done = false
+					if C_QuestLog.IsComplete then
+						local okDone, complete = pcall(C_QuestLog.IsComplete, id)
+						done = okDone and Safe(complete) and true or false
+					end
+					-- "?" where it is handed in, "..." while there is something left to do
+					c:Add({ source = "Quests", u = u, v = v, size = 22, label = done and "?" or "...",
+						title = QuestTitle(id), sub = not done and QuestObjectives(id) or nil, active = done })
+				end
+			end
+		end
+	end
+end
+
+---------------------------------------------------------------------------
 -- The blob
 
 local function Unit16(v)
@@ -519,6 +583,7 @@ function ns.BuildPins(mapID, playerU, playerV)
 	pcall(CollectHereBeDragons, c, mapID, tomtomRead)
 	pcall(CollectHandyNotes, c, maps)
 	pcall(CollectGatherMate, c, maps)
+	pcall(CollectQuests, c, maps)
 
 	local pins = c.pins
 	if #pins > MAX_PINS then

@@ -44,10 +44,11 @@ const FLIGHT_LINE = "rgb(255,214,102)";
 const FLIGHT_SHADE = "rgba(40,24,6,0.7)";
 const KIND_NAMES = { boat: "Корабль", zeppelin: "Цеппелин", airship: "Дирижабль" };
 // Map addons' pins: each addon a layer of its own, shown from its own zoom on the world map
-const PIN_GROUPS = ["Questie", "RestedXP", "TomTom", "HandyNotes", "GatherMate2", "other"];
-const PIN_GROUP_NAMES = { other: "Другие значки", RestedXP: "RestedXP Guide" };
-const PINS_FROM = { TomTom: 1.5, RestedXP: 1.5, other: 3 };
-const PIN_COLORS = { Questie: "#f5d22e", RestedXP: "#e0b04a", TomTom: "#44d07a", HandyNotes: "#5aa9e6", GatherMate2: "#9ad35a", other: "#d0d0d0" };
+const PIN_GROUPS = ["Quests", "Questie", "RestedXP", "TomTom", "HandyNotes", "GatherMate2", "other"];
+const PIN_GROUP_NAMES = { other: "Другие значки", RestedXP: "RestedXP Guide", Quests: "Задания" };
+const PINS_FROM = { TomTom: 1.5, RestedXP: 1.5, Quests: 1.5, other: 3 };
+const QUEST_INK = "#ffd21f"; // the game's quest yellow: "?" to hand in, "..." in progress
+const PIN_COLORS = { Quests: "#ffd21f", Questie: "#f5d22e", RestedXP: "#e0b04a", TomTom: "#44d07a", HandyNotes: "#5aa9e6", GatherMate2: "#9ad35a", other: "#d0d0d0" };
 const GATHER_NAMES = {
   "Herb Gathering": "Травничество", Mining: "Горное дело", Fishing: "Рыбная ловля", "Extract Gas": "Газ",
   Treasure: "Сокровища", Archaeology: "Археология", Logging: "Лесозаготовка",
@@ -1125,19 +1126,19 @@ function drawGuideLine(player) {
   ctx.restore();
 }
 
-function drawLabelPin(x, y, label, active) {
-  ctx.font = `700 ${active ? 13 : 11}px system-ui, sans-serif`;
-  const r = Math.max(active ? 11 : 9, ctx.measureText(label).width / 2 + 4);
+function drawLabelPin(x, y, label, active, ink) {
+  ctx.font = ink ? `800 ${label === "?" ? 16 : 12}px system-ui, sans-serif` : `700 ${active ? 13 : 11}px system-ui, sans-serif`;
+  const r = ink ? 11 : Math.max(active ? 11 : 9, ctx.measureText(label).width / 2 + 4);
   ctx.beginPath();
   ctx.arc(x, y, r, 0, 2 * Math.PI);
   ctx.fillStyle = "rgba(12,10,8,0.82)";
   ctx.fill();
-  ctx.lineWidth = active ? 3 : 1.5;
-  ctx.strokeStyle = active ? "#ffd257" : "rgba(255,255,255,0.7)";
+  ctx.lineWidth = ink ? 2 : active ? 3 : 1.5;
+  ctx.strokeStyle = ink ? (active ? ink : "#e08a2c") : active ? "#ffd257" : "rgba(255,255,255,0.7)";
   ctx.stroke();
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillStyle = "#fff";
+  ctx.fillStyle = ink || "#fff";
   ctx.fillText(label, x, y + 0.5);
   return r;
 }
@@ -1179,7 +1180,7 @@ function drawPins() {
       ctx.drawImage(image.img, p[0] - w / 2, p[1] - h / 2, w, h);
       r = size / 2;
     } else if (pin.label) {
-      r = drawLabelPin(p[0], p[1], pin.label, pin.active);
+      r = drawLabelPin(p[0], p[1], pin.label, pin.active, group === "Quests" ? QUEST_INK : null);
     } else {
       r = 5;
       disk(p[0], p[1], r, PIN_COLORS[group], "rgba(0,0,0,0.75)");
