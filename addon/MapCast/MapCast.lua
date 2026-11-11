@@ -236,6 +236,13 @@ local function AppendBulk(payload, capacity)
 			end
 		end
 	end
+	-- Start the next page one channel further on. Every pass above ends where it began, so
+	-- without this the same channels would fill each page and the last ones would never be
+	-- repeated: a companion started after the game would not get them at all.
+	if roundRobin > n then
+		roundRobin = 1
+	end
+	roundRobin = roundRobin % n + 1
 end
 
 ---------------------------------------------------------------------------

@@ -468,3 +468,22 @@ fn explored_channel_from_the_addon() {
     let explored = run(&game, &mut decoder, 60).remove("explored").unwrap();
     assert_eq!(explored["1431"]["pieces"], json!([[10, 10, 200, 200]]));
 }
+
+#[test]
+fn late_companion_gets_every_channel() {
+    // the game has been running for a while and nothing changes: a companion started now
+    // must still be sent every blob, the last channels too
+    let game = game();
+    run(&game, &mut Decoder::new(), 600);
+    game.exec("MockWoW.step = function() end").unwrap();
+    let mut decoder = Decoder::new();
+    let mut latest = HashMap::new();
+    for _ in 0..400 {
+        game.tick().unwrap();
+        for (name, data) in decoder.feed(&game.render(1024, 48)) {
+            latest.insert(name, data);
+        }
+    }
+    assert!(has_all(&latest, &BULK), "{:?}", latest.keys().collect::<Vec<_>>());
+    assert!(latest.contains_key("pins"), "{:?}", latest.keys().collect::<Vec<_>>());
+}
