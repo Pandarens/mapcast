@@ -24,6 +24,9 @@ const DETAIL_FADE = [3, 4.5];
 const LABELS_OUT = [3, 4];
 const DEFAULT_WORLD_PX = 5; // CSS px per world unit when the world view first opens: zones are in
 const MAX_WORLD_PX = 72; // closest zoom (the zone art has 16 px per world unit; past it the minimap carries the detail)
+const GUIDE_LINE = "rgb(25,197,155)"; // the line from you to where TomTom or the guide sends you, as OpenMap draws it
+const GUIDE_SHADE = "rgba(6,40,32,0.85)";
+const GUIDE_ARROWS_EVERY = 150; // CSS px between the arrowheads along it
 const MINI_FADE = [20, 34]; // zoom where the game's minimap blends into the painted map, as in OpenMap
 const MINI_DEEP = [30, 48]; // ... and where it takes over
 const MINI_MIX = 0.45; // how strong it is after the first fade
@@ -1050,6 +1053,78 @@ function setPins(data) {
   }
 }
 
+// Where the line from the player goes: TomTom's waypoint (the nearest, if there are several),
+// else the guide's current step.
+function guideTarget() {
+  const data = game.pins;
+  const s = game.shown;
+  if (!data || !s || !game.world || !game.state || !game.state.hasWorld) return null;
+  let best = null;
+  let bestDist = Infinity;
+  let active = null;
+  for (const pin of data.pins) {
+    const group = pinGroup(data.sources[pin.source]);
+    if (!layerOn("pins:" + group)) continue;
+    if (group === "TomTom") {
+      const dist = (pin.u - s.u) ** 2 + ((pin.v - s.v) / 1.5) ** 2;
+      if (dist < bestDist) {
+        best = pin;
+        bestDist = dist;
+      }
+    } else if (pin.active && !active) {
+      active = pin;
+    }
+  }
+  return best || active;
+}
+
+function drawGuideLine(player) {
+  const target = player && guideTarget();
+  if (!target) return;
+  const from = worldToScreen(player[0], player[1]);
+  const to = placeToScreen(target.u, target.v);
+  if (!to) return;
+  const dx = to[0] - from[0];
+  const dy = to[1] - from[1];
+  const length = Math.hypot(dx, dy);
+  if (length < 24) return;
+  ctx.save();
+  ctx.lineCap = "round";
+  for (const [width, color] of [[7, GUIDE_SHADE], [4, GUIDE_LINE]]) {
+    ctx.beginPath();
+    ctx.moveTo(from[0], from[1]);
+    ctx.lineTo(to[0], to[1]);
+    ctx.lineWidth = width;
+    ctx.strokeStyle = color;
+    ctx.stroke();
+  }
+  // arrowheads pointing at the target, only along the part in view
+  const angle = Math.atan2(dy, dx);
+  const count = Math.max(1, Math.floor(length / GUIDE_ARROWS_EVERY));
+  for (let k = 1; k <= count; k++) {
+    const t = k / (count + 1);
+    const x = from[0] + dx * t;
+    const y = from[1] + dy * t;
+    if (!onScreen([x, y], 20)) continue;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(angle);
+    ctx.beginPath();
+    ctx.moveTo(-6, -7);
+    ctx.lineTo(4, 0);
+    ctx.lineTo(-6, 7);
+    ctx.lineJoin = "round";
+    ctx.lineWidth = 5.5;
+    ctx.strokeStyle = GUIDE_SHADE;
+    ctx.stroke();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = "#fff";
+    ctx.stroke();
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
 function drawLabelPin(x, y, label, active) {
   ctx.font = `700 ${active ? 13 : 11}px system-ui, sans-serif`;
   const r = Math.max(active ? 11 : 9, ctx.measureText(label).width / 2 + 4);
@@ -1310,6 +1385,7 @@ function draw() {
   }
   hits = [];
   drawPlaces();
+  drawGuideLine(player);
   drawPins();
 
   for (const m of game.group) drawMember(m);
