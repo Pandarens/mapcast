@@ -112,3 +112,51 @@ html, body {
 }
 #controls svg path[fill="none"], #controls svg circle[fill="none"] { fill: none; }
 #zoomin svg, #zoomout svg { fill: none; }
+
+#layerpanel {
+  position: fixed;
+  right: calc(max(16px, env(safe-area-inset-right)) + 58px);
+  bottom: max(16px, env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  background: var(--panel);
+  border-radius: var(--radius);
+  backdrop-filter: blur(6px);
+}
+#layerpanel[hidden] { display: none; }
+
+#layerpanel button {
+  font: inherit;
+  padding: 10px 14px;
+  border: 0;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--muted);
+  text-align: left;
+  cursor: pointer;
+}
+#layerpanel button.on { color: var(--text); box-shadow: inset 3px 0 0 var(--accent); background: rgba(224, 176, 74, 0.14); }
+
+#card {
+  position: fixed;
+  left: max(16px, env(safe-area-inset-left));
+  right: calc(max(16px, env(safe-area-inset-right)) + 64px);
+  bottom: max(16px, env(safe-area-inset-bottom));
+  max-width: 420px;
+  max-height: 45vh;
+  overflow-y: auto;
+  padding: 12px 14px;
+  background: var(--panel);
+  border-radius: var(--radius);
+  backdrop-filter: blur(6px);
+  -webkit-user-select: text;
+  user-select: text;
+}
+#card[hidden] { display: none; }
+#card .title { font-weight: 700; font-size: 16px; }
+#card .title + .sub { margin-bottom: 2px; }
+#card .sub { color: var(--muted); }
+#card .bosses { color: var(--muted); font-size: 13px; margin: 2px 0 8px; }
+#card .bosses:last-child { margin-bottom: 0; }

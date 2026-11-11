@@ -27,6 +27,9 @@
   <button id="worldmode" class="on" hidden aria-label="Карта мира или карта зоны" title="Карта мира / карта зоны">
     <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none"/><path d="M3 12h18M12 3c3 3.2 3 14.8 0 18M12 3c-3 3.2-3 14.8 0 18" fill="none"/></svg>
   </button>
+  <button id="layers" hidden aria-label="Слои карты" title="Полёты, транспорт, подземелья">
+    <svg viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5" fill="none"/></svg>
+  </button>
   <button id="rotate" aria-label="Поворачивать карту по взгляду" title="Север вверху / по взгляду">
     <svg viewBox="0 0 24 24"><path d="M12 3l4 9h-8z"/><path d="M12 21l-4-9h8z" fill="none"/></svg>
   </button>
@@ -40,6 +43,14 @@
     <svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" fill="none"/></svg>
   </button>
 </nav>
+
+<div id="layerpanel" hidden>
+  <button data-layer="flights">Полёты</button>
+  <button data-layer="travel">Корабли и цеппелины</button>
+  <button data-layer="dungeons">Подземелья</button>
+</div>
+
+<div id="card" hidden></div>
 
 <script src="/static/app.js"></script>
 </body>
